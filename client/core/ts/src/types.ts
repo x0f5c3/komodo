@@ -922,6 +922,8 @@ export interface CertificateInfo {
 	last_error?: string;
 	/** Workloads awaiting acknowledgement of the current certificate rotation. */
 	pending_restarts?: string[];
+	/** Identity of the published certificate whose restarts have been queued. */
+	revision?: string;
 }
 
 export type Certificate = Resource<CertificateConfig, CertificateInfo>;

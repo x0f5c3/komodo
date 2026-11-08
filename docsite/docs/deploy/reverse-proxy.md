@@ -26,6 +26,10 @@ Create a **Certificate** resource on the Server that will use it:
 Private keys and certificate versions remain on the Server. Komodo renews certificates before expiry and publishes new versions atomically. The ACME account state is stored separately from workload-mounted certificate files. Removing a Certificate removes its local certificate and ACME state.
 The Server assignment is fixed when the Certificate is created; create a new Certificate to move issuance to another Server.
 
+Published certificate versions record their issuer configuration without credential contents. Changing issuers forces issuance instead of reusing the previous issuer's certificate. Publication uses a unique temporary symlink so an interrupted renewal cannot block later publication.
+
+Resource sync creates or updates basic Server configuration first, then Certificates, then certificate-dependent proxy settings. Certificates required by enabled terminating routes are reconciled before those settings are applied, allowing a Server, Certificate, and routes to be imported together. Enabled termination requires Ready certificates; disabling a proxy does not require them to be Ready. Certificate deletion follows route and workload attachment updates.
+
 ## Proxy routes
 
 Add routes in the Server's **Reverse Proxy** settings:
@@ -50,4 +54,4 @@ Deployments and non-Swarm Stacks can attach a Ready Certificate on the same Serv
 
 On rotation, **Restart** (the default) restarts the attached Deployment or Stack service. Choose **Hot reload** only when the application watches the files and reloads its TLS configuration itself; the mount points to the certificate directory so an atomic certificate-version switch is visible to the container. Swarm Deployments and Stacks are not supported for these host-file mounts.
 
-Core persists pending restart acknowledgements before renewal. Each workload or Stack service is attempted independently, and unsuccessful restarts are retried on later reconciliation passes even when issuance reports no certificate change. Certificate issuance and Server/Certificate mutations are serialized in Core; edits and deletion may wait for an in-flight issuance to finish. A Server cannot be deleted while Certificate resources reference it.
+Core tracks the published certificate revision and persists its pending restart acknowledgements before restarting workloads. Each workload or Stack service is attempted independently, and unsuccessful restarts are retried on later reconciliation passes even when issuance reports no certificate change. Issuer failures do not queue new restarts; publication revisions recover rotations interrupted before Core recorded them. Certificate issuance and Server, Certificate, Deployment, and Stack mutations are serialized in Core; edits and deletion may wait for an in-flight issuance to finish. A Server cannot be deleted while Certificate resources reference it. Certificate host cleanup must succeed before its resource is deleted, so offline Periphery failures leave the resource available for retry.

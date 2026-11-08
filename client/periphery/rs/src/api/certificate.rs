@@ -19,6 +19,9 @@ pub struct EnsureCertificate {
 pub struct EnsureCertificateResponse {
   pub expires_at: i64,
   pub changed: bool,
+  /// Stable identity of the published certificate version.
+  #[serde(default)]
+  pub revision: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Resolve)]

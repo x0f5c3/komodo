@@ -68,7 +68,7 @@ mod stack;
 mod swarm;
 mod sync;
 
-// Certificate issuance and Server/Certificate mutations share one gate so
+// Issuance and Certificate, Server, and workload mutations share one gate so
 // no configuration or deletion can overtake an in-flight host operation.
 pub(crate) static CERTIFICATE_LIFECYCLE: tokio::sync::Mutex<()> =
   tokio::sync::Mutex::const_new(());
@@ -79,10 +79,38 @@ async fn certificate_lifecycle_guard<T: KomodoResource>()
     T::resource_type(),
     ResourceTargetVariant::Certificate
       | ResourceTargetVariant::Server
+      | ResourceTargetVariant::Deployment
+      | ResourceTargetVariant::Stack
   ) {
     Some(CERTIFICATE_LIFECYCLE.lock().await)
   } else {
     None
+  }
+}
+
+#[cfg(test)]
+mod certificate_lifecycle_tests {
+  use super::certificate_lifecycle_guard;
+  use komodo_client::entities::{
+    deployment::Deployment, stack::Stack,
+  };
+
+  #[tokio::test]
+  async fn workload_attachment_writes_share_the_lifecycle_gate() {
+    let deployment =
+      certificate_lifecycle_guard::<Deployment>().await.expect(
+        "Deployment mutations must guard Certificate attachments",
+      );
+    assert!(
+      tokio::time::timeout(
+        std::time::Duration::from_millis(10),
+        certificate_lifecycle_guard::<Stack>(),
+      )
+      .await
+      .is_err()
+    );
+    drop(deployment);
+    assert!(certificate_lifecycle_guard::<Stack>().await.is_some());
   }
 }
 

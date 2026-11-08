@@ -495,7 +495,8 @@ async fn validate_reverse_proxy(
           komodo_client::entities::certificate::Certificate,
         >(certificate_id)
         .await?;
-        if certificate.info.status
+        if config.enabled
+          && certificate.info.status
           != komodo_client::entities::certificate::CertificateStatus::Ready
         {
           anyhow::bail!(

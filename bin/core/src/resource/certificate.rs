@@ -26,7 +26,7 @@ use komodo_client::entities::{
   user::User,
 };
 use periphery_client::api::certificate::{
-  EnsureCertificate, RemoveCertificate,
+  EnsureCertificate, EnsureCertificateResponse, RemoveCertificate,
 };
 
 use crate::{
@@ -168,6 +168,7 @@ impl super::KomodoResource for Certificate {
         expires_at: None,
         last_error: None,
         pending_restarts: updated.info.pending_restarts.clone(),
+        revision: updated.info.revision.clone(),
       },
     )
     .await?;
@@ -224,15 +225,6 @@ impl super::KomodoResource for Certificate {
         "Remove this Certificate from attached Deployments and Stacks before deleting it."
       );
     }
-    Ok(())
-  }
-
-  async fn post_delete(
-    resource: &Resource<Self::Config, Self::Info>,
-    _update: &mut Update,
-  ) -> anyhow::Result<()> {
-    let server =
-      super::get::<Server>(&resource.config.server_id).await?;
     periphery_client(&server)
       .await?
       .request(RemoveCertificate {
@@ -240,6 +232,13 @@ impl super::KomodoResource for Certificate {
       })
       .await
       .context("Failed to remove certificate files from Periphery")?;
+    Ok(())
+  }
+
+  async fn post_delete(
+    _resource: &Resource<Self::Config, Self::Info>,
+    _update: &mut Update,
+  ) -> anyhow::Result<()> {
     Ok(())
   }
 }
@@ -294,46 +293,29 @@ async fn refresh_certificates() {
   }
 }
 
+pub(crate) async fn reconcile_certificate(
+  id_or_name: &str,
+) -> anyhow::Result<()> {
+  let _guard = super::CERTIFICATE_LIFECYCLE.lock().await;
+  let certificate = super::get::<Certificate>(id_or_name).await?;
+  refresh_and_restart(certificate).await
+}
+
 async fn refresh_and_restart(
   mut certificate: Certificate,
 ) -> anyhow::Result<()> {
   let targets = attached_restart_targets(&certificate.id).await?;
-  let renewal_due = certificate.info.status
-    != CertificateStatus::Ready
-    || certificate.info.expires_at.is_none_or(|expires| {
-      expires <= chrono::Utc::now().timestamp() + 30 * 24 * 60 * 60
-    });
-  if renewal_due {
-    enqueue_restarts(
-      &mut certificate.info.pending_restarts,
-      &targets,
-    );
-    // Persist intent before issuance so a Core restart cannot lose recovery.
-    update_certificate_info(
-      &certificate.id,
-      certificate.info.clone(),
-    )
-    .await?;
-  }
   let mut errors = Vec::new();
-  let changed = match refresh_certificate(&certificate).await {
-    Ok((expires_at, changed)) => {
-      certificate.info.status = CertificateStatus::Ready;
-      certificate.info.expires_at = Some(expires_at);
-      certificate.info.last_error = None;
-      changed
-    }
+  let response = refresh_certificate(&certificate).await;
+  let changed = match record_issuance(&mut certificate.info, response)
+  {
+    Ok(changed) => changed,
     Err(error) => {
-      certificate.info.status = CertificateStatus::Error;
-      certificate.info.last_error = Some(format!("{error:#}"));
       update_certificate_info(
         &certificate.id,
         certificate.info.clone(),
       )
       .await?;
-      if certificate.info.expires_at.is_none() {
-        return Err(error);
-      }
       // Recovery of an already-published rotation must not depend on issuance.
       errors.push(format!("Certificate issuance: {error:#}"));
       false
@@ -378,11 +360,44 @@ async fn refresh_and_restart(
   }
   if !errors.is_empty() {
     anyhow::bail!(
-      "Pending certificate restarts: {}",
+      "Certificate reconciliation errors: {}",
       errors.join("; ")
     );
   }
   Ok(())
+}
+
+fn record_issuance(
+  info: &mut CertificateInfo,
+  result: anyhow::Result<EnsureCertificateResponse>,
+) -> anyhow::Result<bool> {
+  match result {
+    Ok(response) => {
+      info.status = CertificateStatus::Ready;
+      info.expires_at = Some(response.expires_at);
+      info.last_error = None;
+      Ok(acknowledge_publication(info, &response))
+    }
+    Err(error) => {
+      info.status = CertificateStatus::Error;
+      info.last_error = Some(format!("{error:#}"));
+      Err(error)
+    }
+  }
+}
+
+fn acknowledge_publication(
+  info: &mut CertificateInfo,
+  response: &EnsureCertificateResponse,
+) -> bool {
+  let changed = response.changed
+    || (!response.revision.is_empty()
+      && info.revision.as_deref()
+        != Some(response.revision.as_str()));
+  if !response.revision.is_empty() {
+    info.revision = Some(response.revision.clone());
+  }
+  changed
 }
 
 fn enqueue_restarts(
@@ -399,7 +414,7 @@ fn enqueue_restarts(
 
 async fn refresh_certificate(
   certificate: &Resource<CertificateConfig, CertificateInfo>,
-) -> anyhow::Result<(i64, bool)> {
+) -> anyhow::Result<EnsureCertificateResponse> {
   let server = super::get::<Server>(&certificate.config.server_id)
     .await
     .context("Certificate Server no longer exists")?;
@@ -430,7 +445,7 @@ async fn refresh_certificate(
     })
     .await
     .context("Failed to issue or renew certificate on Periphery")?;
-  Ok((response.expires_at, response.changed))
+  Ok(response)
 }
 
 enum RestartTarget {
@@ -575,13 +590,7 @@ async fn validate_config(
   if server_id.is_empty() {
     anyhow::bail!("Certificate must be attached to a Server.");
   }
-  if let Some(existing) = existing
-    && server_id != existing.server_id
-  {
-    anyhow::bail!(
-      "A Certificate cannot be moved to another Server; create a new Certificate instead."
-    );
-  }
+  let mut server_id = server_id;
   if config.server_id.is_some() {
     let server = super::get_check_permissions::<Server>(
       &server_id,
@@ -590,7 +599,15 @@ async fn validate_config(
     )
     .await
     .context("Cannot attach Certificate to this Server")?;
+    server_id = server.id.clone();
     config.server_id = Some(server.id);
+  }
+  if let Some(existing) = existing
+    && server_id != existing.server_id
+  {
+    anyhow::bail!(
+      "A Certificate cannot be moved to another Server; create a new Certificate instead."
+    );
   }
 
   if let Some(domains) = &mut config.domains {
@@ -716,9 +733,77 @@ pub(crate) fn certificate_covers_domain(
 #[cfg(test)]
 mod tests {
   use super::{
-    RestartTarget, certificate_covers_domain, enqueue_restarts,
+    RestartTarget, acknowledge_publication,
+    certificate_covers_domain, enqueue_restarts, record_issuance,
     valid_domain,
   };
+
+  #[test]
+  fn detects_publication_after_core_crash_without_repeating_restarts()
+  {
+    let mut info = super::CertificateInfo {
+      revision: Some("old".into()),
+      pending_restarts: vec!["deployment:failed".into()],
+      ..Default::default()
+    };
+    let response = super::EnsureCertificateResponse {
+      expires_at: 123,
+      changed: false,
+      revision: "new".into(),
+    };
+    assert!(acknowledge_publication(&mut info, &response));
+    let mut restored: super::CertificateInfo =
+      serde_json::from_value(serde_json::to_value(info).unwrap())
+        .unwrap();
+    assert!(!acknowledge_publication(&mut restored, &response));
+    assert_eq!(restored.pending_restarts, ["deployment:failed"]);
+    assert_eq!(restored.revision.as_deref(), Some("new"));
+  }
+
+  #[test]
+  fn issuer_recovery_with_unchanged_revision_does_not_queue_restarts()
+  {
+    let mut info = super::CertificateInfo {
+      status: super::CertificateStatus::Error,
+      revision: Some("published".into()),
+      ..Default::default()
+    };
+    assert!(!acknowledge_publication(
+      &mut info,
+      &super::EnsureCertificateResponse {
+        expires_at: 123,
+        changed: false,
+        revision: "published".into(),
+      }
+    ));
+    assert!(info.pending_restarts.is_empty());
+  }
+
+  #[test]
+  fn repeated_issuer_failures_preserve_only_confirmed_restart_targets()
+   {
+    let mut info = super::CertificateInfo {
+      expires_at: Some(123),
+      revision: Some("published".into()),
+      pending_restarts: vec!["deployment:previous-rotation".into()],
+      ..Default::default()
+    };
+    for _ in 0..3 {
+      assert!(
+        record_issuance(
+          &mut info,
+          Err(anyhow::anyhow!("issuer unavailable")),
+        )
+        .is_err()
+      );
+      assert_eq!(info.revision.as_deref(), Some("published"));
+      assert_eq!(info.expires_at, Some(123));
+      assert_eq!(
+        info.pending_restarts,
+        ["deployment:previous-rotation"]
+      );
+    }
+  }
 
   #[test]
   fn pending_restarts_are_deduplicated_and_survive_state_serialization()

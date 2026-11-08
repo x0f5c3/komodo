@@ -24,95 +24,110 @@ impl Resolve<Args> for EnsureCertificate {
     validate_id(&self.id)?;
     validate_domains(&self.domains)?;
     let directory = certificate_directory(&self.id).await?;
-    let domains_match =
-      certificate_domains_match(&directory, &self.domains).await?;
+    ensure_certificate(self, directory).await
+  }
+}
 
-    if !self.force
-      && domains_match
-      && let Some(expires_at) =
-        certificate_expiry(&directory.join("current/tls.crt")).await?
-      && expires_at
-        > chrono::Utc::now().timestamp() + RENEW_BEFORE_SECONDS
-    {
-      return Ok(EnsureCertificateResponse {
-        expires_at,
-        changed: false,
-      });
-    }
+async fn ensure_certificate(
+  request: EnsureCertificate,
+  directory: PathBuf,
+) -> anyhow::Result<EnsureCertificateResponse> {
+  let domains_match =
+    certificate_domains_match(&directory, &request.domains).await?;
+  let issuer_match =
+    certificate_issuer_matches(&directory, &request.issuer).await?;
 
-    let staging = directory
-      .join(format!("issued-{}", uuid::Uuid::new_v4().simple()));
-    fs::create_dir(&staging)
-      .await
-      .context("Failed to create certificate staging directory")?;
-    set_certificate_directory_permissions(&staging).await?;
-    let issued = match self.issuer {
-      CertificateIssuer::AcmeCloudflare {
-        api_token_secret: _,
+  if !request.force
+    && domains_match
+    && issuer_match
+    && let Some(expires_at) =
+      certificate_expiry(&directory.join("current/tls.crt")).await?
+    && expires_at
+      > chrono::Utc::now().timestamp() + RENEW_BEFORE_SECONDS
+  {
+    return Ok(EnsureCertificateResponse {
+      expires_at,
+      changed: false,
+      revision: certificate_revision(&directory).await?,
+    });
+  }
+
+  let staging = directory
+    .join(format!("issued-{}", uuid::Uuid::new_v4().simple()));
+  fs::create_dir(&staging)
+    .await
+    .context("Failed to create certificate staging directory")?;
+  set_certificate_directory_permissions(&staging).await?;
+  let issued = match &request.issuer {
+    CertificateIssuer::AcmeCloudflare {
+      api_token_secret: _,
+      email,
+    } => {
+      let token = request
+        .cloudflare_token
+        .as_deref()
+        .context("Cloudflare API token was not provided")?;
+      issue_acme_certificate(
+        &request.id,
+        &request.domains,
         email,
-      } => {
-        let token = self
-          .cloudflare_token
-          .as_deref()
-          .context("Cloudflare API token was not provided")?;
-        issue_acme_certificate(
-          &self.id,
-          &self.domains,
-          &email,
-          token,
-          &staging,
-          self.force || !domains_match,
-        )
-        .await
+        token,
+        &staging,
+        request.force || !domains_match || !issuer_match,
+      )
+      .await
+    }
+    CertificateIssuer::Tailscale => {
+      if request.domains.len() != 1
+        || request.domains[0].starts_with("*.")
+      {
+        bail!("Tailscale requires exactly one non-wildcard DNS name");
       }
-      CertificateIssuer::Tailscale => {
-        if self.domains.len() != 1
-          || self.domains[0].starts_with("*.")
-        {
-          bail!(
-            "Tailscale requires exactly one non-wildcard DNS name"
-          );
-        }
-        issue_tailscale_certificate(&self.domains[0], &staging).await
-      }
-    };
-    if let Err(error) = issued {
+      issue_tailscale_certificate(&request.domains[0], &staging).await
+    }
+  };
+  if let Err(error) = issued {
+    let _ = fs::remove_dir_all(&staging).await;
+    return Err(error);
+  }
+
+  let expires_at = match certificate_expiry(&staging.join("tls.crt"))
+    .await
+  {
+    Ok(Some(expires_at)) => expires_at,
+    Ok(None) => {
+      let _ = fs::remove_dir_all(&staging).await;
+      bail!(
+        "Certificate issuer completed without writing a valid certificate"
+      );
+    }
+    Err(error) => {
       let _ = fs::remove_dir_all(&staging).await;
       return Err(error);
     }
-
-    let expires_at = match certificate_expiry(
-      &staging.join("tls.crt"),
-    )
-    .await
-    {
-      Ok(Some(expires_at)) => expires_at,
-      Ok(None) => {
-        let _ = fs::remove_dir_all(&staging).await;
-        bail!(
-          "Certificate issuer completed without writing a valid certificate"
-        );
-      }
-      Err(error) => {
-        let _ = fs::remove_dir_all(&staging).await;
-        return Err(error);
-      }
-    };
-    publish_certificate(&directory, &staging).await?;
-    let mut domains = self.domains;
-    domains.sort();
-    atomic_write(
-      &directory.join("domains"),
-      domains.join("\n").as_bytes(),
-      0o644,
-    )
-    .await
-    .context("Failed to persist certificate domain set")?;
-    Ok(EnsureCertificateResponse {
-      expires_at,
-      changed: true,
-    })
-  }
+  };
+  let mut domains = request.domains;
+  domains.sort();
+  atomic_write(
+    &staging.join("domains"),
+    domains.join("\n").as_bytes(),
+    0o644,
+  )
+  .await
+  .context("Failed to persist certificate domain set")?;
+  atomic_write(
+    &staging.join("issuer"),
+    &serde_json::to_vec(&request.issuer)?,
+    0o644,
+  )
+  .await
+  .context("Failed to persist certificate issuer identity")?;
+  publish_certificate(&directory, &staging).await?;
+  Ok(EnsureCertificateResponse {
+    expires_at,
+    changed: true,
+    revision: certificate_revision(&directory).await?,
+  })
 }
 
 async fn certificate_domains_match(
@@ -120,7 +135,8 @@ async fn certificate_domains_match(
   domains: &[String],
 ) -> anyhow::Result<bool> {
   let stored =
-    match fs::read_to_string(directory.join("domains")).await {
+    match fs::read_to_string(directory.join("current/domains")).await
+    {
       Ok(stored) => stored,
       Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
         return Ok(false);
@@ -136,6 +152,43 @@ async fn certificate_domains_match(
   stored_domains.sort();
   requested_domains.sort();
   Ok(stored_domains == requested_domains)
+}
+
+async fn certificate_issuer_matches(
+  directory: &Path,
+  issuer: &CertificateIssuer,
+) -> anyhow::Result<bool> {
+  let stored = match fs::read(directory.join("current/issuer")).await
+  {
+    Ok(stored) => stored,
+    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+      return Ok(false);
+    }
+    Err(error) => {
+      return Err(error)
+        .context("Failed to read certificate issuer identity");
+    }
+  };
+  let stored: CertificateIssuer = serde_json::from_slice(&stored)
+    .context("Invalid certificate issuer identity")?;
+  Ok(&stored == issuer)
+}
+
+async fn certificate_revision(
+  directory: &Path,
+) -> anyhow::Result<String> {
+  // Issued directories are immutable and uniquely named, including across
+  // Periphery restarts. Read the activated link, not a speculative version.
+  let current = fs::read_link(directory.join("current"))
+    .await
+    .context("Failed to read published certificate version")?;
+  let revision = current
+    .to_str()
+    .and_then(|name| name.strip_prefix("issued-"))
+    .context("Invalid published certificate version")?;
+  uuid::Uuid::parse_str(revision)
+    .context("Invalid published certificate revision")?;
+  Ok(revision.to_string())
 }
 
 #[cfg(unix)]
@@ -445,7 +498,8 @@ async fn publish_certificate(
   directory: &Path,
   staging: &Path,
 ) -> anyhow::Result<()> {
-  let next = directory.join("current-next");
+  let next = directory
+    .join(format!("current-next-{}", uuid::Uuid::new_v4().simple()));
   let current = directory.join("current");
   let name =
     staging.file_name().context("Invalid staging directory")?;
@@ -649,6 +703,240 @@ async fn set_file_permissions(
 #[cfg(all(test, unix))]
 mod tests {
   use super::*;
+
+  fn test_directory() -> PathBuf {
+    std::env::current_dir().unwrap().join(format!(
+      "certificate-test-{}",
+      uuid::Uuid::new_v4().simple()
+    ))
+  }
+
+  async fn test_version(directory: &Path) -> PathBuf {
+    let version = directory
+      .join(format!("issued-{}", uuid::Uuid::new_v4().simple()));
+    fs::create_dir_all(&version).await.unwrap();
+    version
+  }
+
+  #[test]
+  fn ensure_response_accepts_legacy_missing_revision() {
+    let response: EnsureCertificateResponse =
+      serde_json::from_str(r#"{"expires_at":123,"changed":false}"#)
+        .unwrap();
+    assert!(response.revision.is_empty());
+  }
+
+  #[tokio::test]
+  async fn unforced_reuse_requires_the_same_issuer_and_returns_revision()
+   {
+    let directory = test_directory();
+    let version = test_version(&directory).await;
+    let issuer = CertificateIssuer::AcmeCloudflare {
+      api_token_secret: "cloudflare".into(),
+      email: "admin@example.com".into(),
+    };
+    fs::write(
+      version.join("tls.crt"),
+      include_bytes!("certificate-test.pem"),
+    )
+    .await
+    .unwrap();
+    atomic_write(&version.join("domains"), b"app.example.com", 0o644)
+      .await
+      .unwrap();
+    atomic_write(
+      &version.join("issuer"),
+      &serde_json::to_vec(&issuer).unwrap(),
+      0o644,
+    )
+    .await
+    .unwrap();
+    publish_certificate(&directory, &version).await.unwrap();
+    let request = EnsureCertificate {
+      id: "certificate".into(),
+      domains: vec!["app.example.com".into()],
+      issuer,
+      force: false,
+      cloudflare_token: None,
+    };
+    let reused =
+      ensure_certificate(request.clone(), directory.clone())
+        .await
+        .unwrap();
+    assert!(!reused.changed);
+    assert_eq!(
+      reused.revision,
+      certificate_revision(&directory).await.unwrap()
+    );
+    assert!(reused.expires_at > chrono::Utc::now().timestamp());
+    for previous_issuer in [
+      CertificateIssuer::Tailscale,
+      CertificateIssuer::AcmeCloudflare {
+        api_token_secret: "another-secret".into(),
+        email: "admin@example.com".into(),
+      },
+      CertificateIssuer::AcmeCloudflare {
+        api_token_secret: "cloudflare".into(),
+        email: "other@example.com".into(),
+      },
+    ] {
+      atomic_write(
+        &version.join("issuer"),
+        &serde_json::to_vec(&previous_issuer).unwrap(),
+        0o644,
+      )
+      .await
+      .unwrap();
+      // Missing credentials prove the ACME issuance path is reached instead
+      // of silently reusing the still-valid certificate.
+      let error =
+        ensure_certificate(request.clone(), directory.clone())
+          .await
+          .unwrap_err();
+      assert!(
+        error
+          .to_string()
+          .contains("Cloudflare API token was not provided")
+      );
+      assert_eq!(
+        reused.revision,
+        certificate_revision(&directory).await.unwrap()
+      );
+    }
+    fs::remove_dir_all(&directory).await.unwrap();
+  }
+
+  #[tokio::test]
+  async fn issuer_identity_is_bound_to_the_published_certificate() {
+    let directory = test_directory();
+    let domains = vec!["app.example.com".to_string()];
+    let cloudflare = CertificateIssuer::AcmeCloudflare {
+      api_token_secret: "cloudflare".into(),
+      email: "admin@example.com".into(),
+    };
+    let first = test_version(&directory).await;
+    atomic_write(
+      &first.join("domains"),
+      domains.join("\n").as_bytes(),
+      0o644,
+    )
+    .await
+    .unwrap();
+    atomic_write(
+      &first.join("issuer"),
+      &serde_json::to_vec(&cloudflare).unwrap(),
+      0o644,
+    )
+    .await
+    .unwrap();
+    publish_certificate(&directory, &first).await.unwrap();
+    assert!(
+      certificate_domains_match(&directory, &domains)
+        .await
+        .unwrap()
+    );
+    assert!(
+      certificate_issuer_matches(&directory, &cloudflare)
+        .await
+        .unwrap()
+    );
+    for issuer in [
+      CertificateIssuer::Tailscale,
+      CertificateIssuer::AcmeCloudflare {
+        api_token_secret: "another-secret".into(),
+        email: "admin@example.com".into(),
+      },
+      CertificateIssuer::AcmeCloudflare {
+        api_token_secret: "cloudflare".into(),
+        email: "other@example.com".into(),
+      },
+    ] {
+      assert!(
+        !certificate_issuer_matches(&directory, &issuer)
+          .await
+          .unwrap()
+      );
+    }
+    let second = test_version(&directory).await;
+    atomic_write(
+      &second.join("issuer"),
+      &serde_json::to_vec(&CertificateIssuer::Tailscale).unwrap(),
+      0o644,
+    )
+    .await
+    .unwrap();
+    // Staged identity must not make an old certificate eligible for reuse.
+    assert!(
+      !certificate_issuer_matches(
+        &directory,
+        &CertificateIssuer::Tailscale
+      )
+      .await
+      .unwrap()
+    );
+    publish_certificate(&directory, &second).await.unwrap();
+    assert!(
+      certificate_issuer_matches(
+        &directory,
+        &CertificateIssuer::Tailscale
+      )
+      .await
+      .unwrap()
+    );
+    assert!(
+      !certificate_issuer_matches(&directory, &cloudflare)
+        .await
+        .unwrap()
+    );
+    fs::remove_file(second.join("issuer")).await.unwrap();
+    assert!(
+      !certificate_issuer_matches(
+        &directory,
+        &CertificateIssuer::Tailscale
+      )
+      .await
+      .unwrap()
+    );
+    fs::remove_dir_all(&directory).await.unwrap();
+  }
+
+  #[tokio::test]
+  async fn publication_recovers_from_stale_links_and_reports_stable_revision()
+   {
+    let directory = test_directory();
+    let first = test_version(&directory).await;
+    publish_certificate(&directory, &first).await.unwrap();
+    let first_revision =
+      certificate_revision(&directory).await.unwrap();
+    assert_eq!(
+      first_revision,
+      certificate_revision(&directory).await.unwrap()
+    );
+    let second = test_version(&directory).await;
+    for stale in ["current-next", "current-next-abandoned"] {
+      fs::symlink(first.file_name().unwrap(), directory.join(stale))
+        .await
+        .unwrap();
+    }
+    publish_certificate(&directory, &second).await.unwrap();
+    let second_revision =
+      certificate_revision(&directory).await.unwrap();
+    assert_ne!(first_revision, second_revision);
+    assert_eq!(
+      format!("issued-{second_revision}"),
+      second.file_name().unwrap().to_str().unwrap()
+    );
+    assert_eq!(
+      fs::read_link(directory.join("current")).await.unwrap(),
+      Path::new(second.file_name().unwrap())
+    );
+    assert_eq!(
+      second_revision,
+      certificate_revision(&directory).await.unwrap()
+    );
+    assert!(!first.exists());
+    fs::remove_dir_all(&directory).await.unwrap();
+  }
 
   #[test]
   fn certbot_mounts_state_and_keeps_account_data_outside_certificates()

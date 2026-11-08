@@ -122,6 +122,9 @@ pub struct CertificateInfo {
   /// Workloads awaiting acknowledgement of the current certificate rotation.
   #[serde(default)]
   pub pending_restarts: Vec<String>,
+  /// Identity of the published certificate whose restarts have been queued.
+  #[serde(default)]
+  pub revision: Option<String>,
 }
 
 #[typeshare]
