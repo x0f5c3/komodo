@@ -282,6 +282,8 @@ async fn ensure_proxy_container(
     ));
   }
 
+  let runtime_mounts =
+    proxy_mount_arguments(dynamic_directory, certificate_mounts)?;
   if exists {
     let previous = previous.as_deref().context(
       "Cannot replace active proxy without its rollback configuration",
@@ -331,10 +333,7 @@ async fn ensure_proxy_container(
     "--publish".to_string(),
     https_publish,
   ];
-  arguments.extend(proxy_mount_arguments(
-    dynamic_directory,
-    certificate_mounts,
-  )?);
+  arguments.extend(runtime_mounts);
   arguments.push(image.to_string());
   let replacement = async {
     atomic_write(&routes_path, dynamic, 0o644).await?;

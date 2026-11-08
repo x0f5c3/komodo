@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: ["**"]
   pull_request:
     branches: [main]
 
@@ -38,6 +38,15 @@ jobs:
 
       - name: Run tests
         run: cargo test --verbose
+
+      - name: Build managed proxy image
+        run: docker build -f bin/proxy/Dockerfile -t komodo-proxy:0.0.0 .
+
+      - name: Test managed proxy container
+        run: python3 bin/proxy/tests/container_smoke.py
+
+      - name: Test managed proxy replacement rollback
+        run: cargo test -p komodo_periphery preserves_active_proxy_on_preflight_and_startup_failure -- --ignored --nocapture
 
   fmt:
     name: Format
