@@ -33,6 +33,8 @@ pub mod api_key;
 pub mod build;
 /// Subtypes of [Builder][builder::Builder].
 pub mod builder;
+/// Subtypes of [Certificate][certificate::Certificate].
+pub mod certificate;
 /// [core config][config::core] and [periphery config][config::periphery]
 pub mod config;
 /// Subtypes of [Deployment][deployment::Deployment].
@@ -1349,6 +1351,12 @@ pub enum Operation {
   TestAlerter,
   SendAlert,
 
+  // Certificate
+  CreateCertificate,
+  UpdateCertificate,
+  RenameCertificate,
+  DeleteCertificate,
+
   // Maintenance
   ClearRepoCache,
   BackupCoreDatabase,
@@ -1484,6 +1492,7 @@ pub enum ResourceTarget {
   Action(String),
   Builder(String),
   Alerter(String),
+  Certificate(String),
   ResourceSync(String),
 }
 
@@ -1513,6 +1522,7 @@ impl ResourceTarget {
       ResourceTarget::Action(id) => id.is_empty(),
       ResourceTarget::Builder(id) => id.is_empty(),
       ResourceTarget::Alerter(id) => id.is_empty(),
+      ResourceTarget::Certificate(id) => id.is_empty(),
       ResourceTarget::ResourceSync(id) => id.is_empty(),
     }
   }
@@ -1534,6 +1544,7 @@ impl ResourceTarget {
       ResourceTarget::Deployment(id) => id,
       ResourceTarget::Repo(id) => id,
       ResourceTarget::Alerter(id) => id,
+      ResourceTarget::Certificate(id) => id,
       ResourceTarget::Procedure(id) => id,
       ResourceTarget::Action(id) => id,
       ResourceTarget::ResourceSync(id) => id,
@@ -1602,6 +1613,12 @@ impl From<&alerter::Alerter> for ResourceTarget {
   }
 }
 
+impl From<&certificate::Certificate> for ResourceTarget {
+  fn from(certificate: &certificate::Certificate) -> Self {
+    Self::Certificate(certificate.id.clone())
+  }
+}
+
 impl ResourceTargetVariant {
   /// These need to use snake case
   pub fn toml_header(&self) -> &'static str {
@@ -1618,6 +1635,7 @@ impl ResourceTargetVariant {
       ResourceTargetVariant::ResourceSync => "resource_sync",
       ResourceTargetVariant::Builder => "builder",
       ResourceTargetVariant::Alerter => "alerter",
+      ResourceTargetVariant::Certificate => "certificate",
     }
   }
 }
@@ -1685,6 +1703,9 @@ pub fn resource_link(
     }
     ResourceTargetVariant::Alerter => {
       format!("/alerters/{id}")
+    }
+    ResourceTargetVariant::Certificate => {
+      format!("/certificates/{id}")
     }
   };
   format!("{host}{path}")

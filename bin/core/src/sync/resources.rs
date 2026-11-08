@@ -3,10 +3,10 @@ use std::collections::HashMap;
 use formatting::{Color, bold, colored, muted};
 use komodo_client::entities::{
   ResourceTargetVariant, action::Action, alerter::Alerter,
-  build::Build, builder::Builder, deployment::Deployment,
-  procedure::Procedure, repo::Repo, server::Server, stack::Stack,
-  swarm::Swarm, sync::ResourceSync, tag::Tag, update::Log,
-  user::sync_user,
+  build::Build, builder::Builder, certificate::Certificate,
+  deployment::Deployment, procedure::Procedure, repo::Repo,
+  server::Server, stack::Stack, swarm::Swarm, sync::ResourceSync,
+  tag::Tag, update::Log, user::sync_user,
 };
 use partial_derive2::MaybeNone;
 
@@ -55,6 +55,9 @@ impl ExecuteResourceSync for Alerter {}
 
 impl ResourceSyncTrait for Builder {}
 impl ExecuteResourceSync for Builder {}
+
+impl ResourceSyncTrait for Certificate {}
+impl ExecuteResourceSync for Certificate {}
 
 impl ResourceSyncTrait for Action {}
 impl ExecuteResourceSync for Action {}

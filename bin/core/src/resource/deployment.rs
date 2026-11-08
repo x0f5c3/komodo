@@ -7,6 +7,7 @@ use indexmap::IndexSet;
 use komodo_client::entities::{
   Operation, ResourceTarget, ResourceTargetVariant, SwarmOrServer,
   build::Build,
+  certificate::DeploymentCertificateAttachment,
   deployment::{
     Deployment, DeploymentConfig, DeploymentConfigDiff,
     DeploymentImage, DeploymentInfo, DeploymentListItem,
@@ -210,7 +211,7 @@ impl super::KomodoResource for Deployment {
     config: &mut Self::PartialConfig,
     user: &User,
   ) -> anyhow::Result<()> {
-    validate_config(config, user).await
+    validate_config(config, user, None).await
   }
 
   async fn post_create(
@@ -258,7 +259,8 @@ impl super::KomodoResource for Deployment {
     config: &mut Self::PartialConfig,
     user: &User,
   ) -> anyhow::Result<()> {
-    validate_config(config, user).await?;
+    let existing = super::get::<Deployment>(id).await?;
+    validate_config(config, user, Some(&existing)).await?;
     handle_custom_name_update(id, config).await
   }
 
@@ -396,6 +398,7 @@ impl super::KomodoResource for Deployment {
 async fn validate_config(
   config: &mut PartialDeploymentConfig,
   user: &User,
+  existing: Option<&Deployment>,
 ) -> anyhow::Result<()> {
   if let Some(swarm_id) = &config.swarm_id
     && !swarm_id.is_empty()
@@ -455,6 +458,88 @@ async fn validate_config(
   }
   if let Some(extra_args) = &mut config.extra_args {
     extra_args.retain(|v| !empty_or_only_spaces(v))
+  }
+  if let Some(attachments) = &mut config.certificate_mounts {
+    let server_id = config
+      .server_id
+      .as_deref()
+      .or_else(|| {
+        existing
+          .map(|deployment| deployment.config.server_id.as_str())
+      })
+      .unwrap_or_default();
+    let swarm_id = config
+      .swarm_id
+      .as_deref()
+      .or_else(|| {
+        existing.map(|deployment| deployment.config.swarm_id.as_str())
+      })
+      .unwrap_or_default();
+    validate_certificate_attachments(
+      attachments,
+      server_id,
+      swarm_id,
+      user,
+    )
+    .await?;
+  } else if let Some(existing) = existing
+    && (config.server_id.is_some() || config.swarm_id.is_some())
+  {
+    let server_id = config
+      .server_id
+      .as_deref()
+      .unwrap_or(&existing.config.server_id);
+    let swarm_id = config
+      .swarm_id
+      .as_deref()
+      .unwrap_or(&existing.config.swarm_id);
+    validate_certificate_attachments(
+      &mut existing.config.certificate_mounts.clone(),
+      server_id,
+      swarm_id,
+      user,
+    )
+    .await?;
+  }
+  Ok(())
+}
+
+async fn validate_certificate_attachments(
+  attachments: &mut [DeploymentCertificateAttachment],
+  server_id: &str,
+  swarm_id: &str,
+  user: &User,
+) -> anyhow::Result<()> {
+  if attachments.is_empty() {
+    return Ok(());
+  }
+  if !swarm_id.is_empty() {
+    anyhow::bail!(
+      "Komodo-managed certificate mounts currently require a Server-mode Deployment."
+    );
+  }
+  if server_id.is_empty() {
+    anyhow::bail!(
+      "A Deployment must be assigned to a Server before attaching a Certificate."
+    );
+  }
+  let mut mount_paths = IndexSet::new();
+  for attachment in attachments {
+    attachment.certificate_id =
+      super::certificate::validate_attachment(
+        &attachment.certificate_id,
+        server_id,
+        user,
+      )
+      .await?;
+    attachment.mount_path = super::certificate::validate_mount_path(
+      &attachment.mount_path,
+    )?;
+    if !mount_paths.insert(attachment.mount_path.clone()) {
+      anyhow::bail!(
+        "A Deployment cannot mount multiple Certificates at the same path."
+      );
+    }
   }
   Ok(())
 }

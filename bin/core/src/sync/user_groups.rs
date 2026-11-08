@@ -400,6 +400,13 @@ pub async fn get_updates_for_execution(
             .map(|b| b.name.clone())
             .unwrap_or_default()
         }
+        ResourceTarget::Certificate(id) => {
+          *id = all_resources
+            .certificates
+            .get(id)
+            .map(|resource| resource.name.clone())
+            .unwrap_or_default()
+        }
       }
       PermissionToml {
         target: p.resource_target,
@@ -937,6 +944,20 @@ async fn expand_user_group_permissions(
           });
         expanded.extend(permissions);
       }
+      ResourceTargetVariant::Certificate => {
+        let permissions = all_resources
+          .certificates
+          .values()
+          .filter(|resource| matcher.is_match(&resource.name))
+          .map(|resource| PermissionToml {
+            target: ResourceTarget::Certificate(
+              resource.name.clone(),
+            ),
+            level: permission.level,
+            specific: permission.specific.clone(),
+          });
+        expanded.extend(permissions);
+      }
       ResourceTargetVariant::System => {}
     }
   }
@@ -1134,6 +1155,13 @@ pub async fn convert_user_groups(
             .alerters
             .get(id)
             .map(|r| r.name.clone())
+            .unwrap_or_default()
+        }
+        ResourceTarget::Certificate(id) => {
+          *id = all
+            .certificates
+            .get(id)
+            .map(|resource| resource.name.clone())
             .unwrap_or_default()
         }
         ResourceTarget::System(_) => {}

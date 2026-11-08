@@ -1,6 +1,6 @@
 use std::{
-  borrow::Cow, fmt::Write, path::PathBuf, sync::LazyLock,
-  time::Duration,
+  borrow::Cow, collections::BTreeMap, fmt::Write, path::PathBuf,
+  sync::LazyLock, time::Duration,
 };
 
 use anyhow::{Context, anyhow};
@@ -23,6 +23,7 @@ use komodo_client::{
 };
 use mogh_resolver::Resolve;
 use periphery_client::api::{DeployStackResponse, compose::*};
+use serde::{Deserialize, Serialize};
 use shell_escape::unix::escape;
 use tracing::Instrument;
 
@@ -35,6 +36,137 @@ use crate::{
     write::write_stack,
   },
 };
+
+#[derive(Serialize)]
+struct CertificateComposeOverride {
+  services: BTreeMap<String, CertificateServiceOverride>,
+}
+
+#[derive(Deserialize)]
+struct ComposeServiceNames {
+  services: BTreeMap<String, serde_yaml_ng::Value>,
+}
+
+#[derive(Serialize)]
+struct CertificateServiceOverride {
+  volumes: Vec<CertificateVolumeOverride>,
+}
+
+#[derive(Serialize)]
+struct CertificateVolumeOverride {
+  #[serde(rename = "type")]
+  kind: &'static str,
+  source: String,
+  target: String,
+  read_only: bool,
+}
+
+struct TemporaryComposeOverride(PathBuf);
+
+impl Drop for TemporaryComposeOverride {
+  fn drop(&mut self) {
+    if let Err(error) = std::fs::remove_file(&self.0)
+      && error.kind() != std::io::ErrorKind::NotFound
+    {
+      tracing::warn!(
+        "Failed to clean up temporary certificate Compose override | {} | {error}",
+        self.0.display()
+      );
+    }
+  }
+}
+
+async fn create_certificate_compose_override(
+  stack: &komodo_client::entities::stack::Stack,
+) -> anyhow::Result<Option<(PathBuf, TemporaryComposeOverride)>> {
+  if stack.config.certificate_mounts.is_empty() {
+    return Ok(None);
+  }
+
+  let override_dir = periphery_config()
+    .root_directory
+    .join("certificates/overrides");
+  tokio::fs::create_dir_all(&override_dir)
+    .await
+    .context("Failed to create certificate override directory")?;
+  #[cfg(unix)]
+  {
+    use std::os::unix::fs::PermissionsExt;
+    tokio::fs::set_permissions(
+      &override_dir,
+      std::fs::Permissions::from_mode(0o700),
+    )
+    .await
+    .context("Failed to secure certificate override directory")?;
+  }
+
+  let mut services =
+    BTreeMap::<String, CertificateServiceOverride>::new();
+  for attachment in &stack.config.certificate_mounts {
+    if attachment.service.is_empty()
+      || !attachment.mount_path.starts_with('/')
+      || attachment.mount_path == "/"
+      || attachment.mount_path.contains(':')
+      || attachment.mount_path.contains(',')
+      || attachment.mount_path.contains('\\')
+      || attachment
+        .mount_path
+        .split('/')
+        .any(|part| part == "." || part == "..")
+    {
+      anyhow::bail!("Invalid certificate service or mount path");
+    }
+
+    let source = crate::api::certificate::certificate_mount_source(
+      &attachment.certificate_id,
+    )
+    .await?;
+    let source = source
+      .to_str()
+      .context("Certificate storage path is not valid UTF-8")?;
+    if source.contains(':') || source.contains(',') {
+      anyhow::bail!(
+        "Certificate storage path cannot contain commas or colons"
+      );
+    }
+    services
+      .entry(attachment.service.clone())
+      .or_insert_with(|| CertificateServiceOverride {
+        volumes: Vec::new(),
+      })
+      .volumes
+      .push(CertificateVolumeOverride {
+        kind: "bind",
+        source: source.to_string(),
+        target: attachment.mount_path.clone(),
+        read_only: true,
+      });
+  }
+
+  let contents =
+    serde_yaml_ng::to_string(&CertificateComposeOverride {
+      services,
+    })
+    .context("Failed to serialize certificate Compose override")?;
+  let path = override_dir.join(format!(
+    "certificate-{}.yaml",
+    uuid::Uuid::new_v4().simple()
+  ));
+  tokio::fs::write(&path, contents)
+    .await
+    .context("Failed to write certificate Compose override")?;
+  #[cfg(unix)]
+  {
+    use std::os::unix::fs::PermissionsExt;
+    tokio::fs::set_permissions(
+      &path,
+      std::fs::Permissions::from_mode(0o600),
+    )
+    .await
+    .context("Failed to secure certificate Compose override")?;
+  }
+  Ok(Some((path.clone(), TemporaryComposeOverride(path))))
+}
 
 impl Resolve<crate::api::Args> for GetComposeLog {
   async fn resolve(
@@ -530,7 +662,7 @@ impl Resolve<crate::api::Args> for ComposeUp {
       format!(" -- {}", services.join(" "))
     };
 
-    let file_args = stack.compose_file_paths().join(" -f ");
+    let mut file_args = stack.compose_file_paths().join(" -f ");
 
     // This will be the last project name, which is the one that needs to be destroyed.
     // Might be different from the current project name, if user renames stack / changes to custom project name.
@@ -558,6 +690,7 @@ impl Resolve<crate::api::Args> for ComposeUp {
 
     // Uses 'docker compose config' command to extract services (including image)
     // after performing interpolation
+    let mut certificate_override = None;
     {
       let command = format!(
         "{docker_compose} -p {project_name} -f {file_args}{env_file_args} config",
@@ -621,7 +754,70 @@ impl Resolve<crate::api::Args> for ComposeUp {
         return Ok(res);
       }
 
+      if let Some((path, cleanup)) =
+        create_certificate_compose_override(&stack).await?
+      {
+        let compose = serde_yaml_ng::from_str::<ComposeServiceNames>(
+          &config_log.stdout,
+        )
+        .context(
+          "Failed to parse Compose services for certificate mounts",
+        )?;
+        for attachment in &stack.config.certificate_mounts {
+          if !compose.services.contains_key(&attachment.service) {
+            anyhow::bail!(
+              "Certificate attachment references unknown Compose service '{}'",
+              attachment.service
+            );
+          }
+        }
+        let path_arg =
+          escape(Cow::Owned(path.to_string_lossy().into_owned()));
+        write!(&mut file_args, " -f {path_arg}")?;
+        certificate_override = Some(cleanup);
+      }
+
       config_log.sanitize(&replacers);
+      res.logs.push(config_log);
+    }
+
+    if certificate_override.is_some() {
+      let command = format!(
+        "{docker_compose} -p {project_name} -f {file_args}{env_file_args} config",
+      );
+      let (command, wrapped) = match maybe_wrap_command(
+        command,
+        &compose_cmd_wrapper,
+        wrapper_include,
+        "config",
+      ) {
+        Ok(result) => result,
+        Err(log) => {
+          res.logs.push(log);
+          return Ok(res);
+        }
+      };
+      let config_log = if wrapped {
+        run_komodo_shell_command(
+          "Compose Config With Certificates",
+          command,
+          CommandOptions::default().path(run_directory.as_path()),
+        )
+        .await
+      } else {
+        run_komodo_standard_command(
+          "Compose Config With Certificates",
+          command,
+          CommandOptions::default().path(run_directory.as_path()),
+        )
+        .await
+      };
+      if !config_log.success {
+        res.logs.push(config_log);
+        return Ok(res);
+      }
+      res.merged_config =
+        svi::replace_in_string(&config_log.stdout, &replacers).into();
       res.logs.push(config_log);
     }
 

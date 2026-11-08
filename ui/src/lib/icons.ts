@@ -87,6 +87,7 @@ export const ICONS = {
   Alerter: AlarmClock,
   Build: Hammer,
   Builder: Factory,
+  Certificate: KeyRound,
   Deployment: Rocket,
   Procedure: Route,
   Repo: FolderGit,

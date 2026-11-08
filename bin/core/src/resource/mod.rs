@@ -58,6 +58,7 @@ mod action;
 mod alerter;
 mod build;
 mod builder;
+mod certificate;
 mod deployment;
 mod procedure;
 mod refresh;
@@ -74,6 +75,7 @@ pub use build::{
   get_build_state, refresh_build_state_cache,
   spawn_build_state_refresh_loop,
 };
+pub use certificate::*;
 pub use deployment::setup_deployment_execution;
 pub use procedure::{
   refresh_procedure_state_cache, spawn_procedure_state_refresh_loop,
@@ -840,6 +842,9 @@ fn resource_target<T: KomodoResource>(id: String) -> ResourceTarget {
     }
     ResourceTargetVariant::Builder => ResourceTarget::Builder(id),
     ResourceTargetVariant::Alerter => ResourceTarget::Alerter(id),
+    ResourceTargetVariant::Certificate => {
+      ResourceTarget::Certificate(id)
+    }
   }
 }
 
@@ -1135,6 +1140,7 @@ where
     ResourceTarget::ResourceSync(id) => ("recents.ResourceSync", id),
     ResourceTarget::Builder(id) => ("recents.Builder", id),
     ResourceTarget::Alerter(id) => ("recents.Alerter", id),
+    ResourceTarget::Certificate(id) => ("recents.Certificate", id),
     ResourceTarget::System(_) => return,
   };
   if let Err(e) = db_client()

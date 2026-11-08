@@ -182,6 +182,21 @@ impl ReplaceIds for Builder {
   }
 }
 
+impl ReplaceIds
+  for komodo_client::entities::certificate::Certificate
+{
+  fn replace_ids(config: &mut Self::Config) {
+    let all = all_resources_cache().load();
+    config.server_id.clone_from(
+      all
+        .servers
+        .get(&config.server_id)
+        .map(|server| &server.name)
+        .unwrap_or(&String::new()),
+    );
+  }
+}
+
 impl ReplaceIds for Procedure {
   fn replace_ids(config: &mut Self::Config) {
     replace_procedure_stage_ids_with_names(&mut config.stages);
@@ -230,6 +245,7 @@ impl ReplaceIds for Alerter {
         Action => actions,
         Builder => builders,
         Alerter => alerters,
+        Certificate => certificates,
         ResourceSync => syncs,
       });
     }
@@ -245,6 +261,7 @@ impl ReplaceIds for Alerter {
         Action => actions,
         Builder => builders,
         Alerter => alerters,
+        Certificate => certificates,
         ResourceSync => syncs,
       });
     }

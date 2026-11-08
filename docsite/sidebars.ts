@@ -25,6 +25,7 @@ const sidebars: SidebarsConfig = {
       items: [
         "deploy/compose",
         "deploy/containers",
+        "deploy/reverse-proxy",
         "deploy/auto-update",
       ],
     },

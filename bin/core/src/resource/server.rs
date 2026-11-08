@@ -12,14 +12,17 @@ use komodo_client::entities::{
   permission::SpecificPermission,
   resource::Resource,
   server::{
-    PartialServerConfig, Server, ServerConfig, ServerConfigDiff,
-    ServerInfo, ServerListItem, ServerListItemInfo,
-    ServerQuerySpecifics,
+    PartialServerConfig, ReverseProxyConfig, ReverseProxyTlsMode,
+    Server, ServerConfig, ServerConfigDiff, ServerInfo,
+    ServerListItem, ServerListItemInfo, ServerQuerySpecifics,
   },
   update::Update,
   user::User,
 };
 use periphery_client::api;
+use periphery_client::api::reverse_proxy::{
+  EnsureReverseProxy, RemoveReverseProxy,
+};
 
 use crate::{
   config::core_config,
@@ -156,10 +159,11 @@ impl super::KomodoResource for Server {
   }
 
   async fn validate_create_config(
-    _config: &mut Self::PartialConfig,
-    _user: &User,
+    config: &mut Self::PartialConfig,
+    user: &User,
   ) -> anyhow::Result<()> {
-    Ok(())
+    validate_reverse_proxy(config.reverse_proxy.as_mut(), "", user)
+      .await
   }
 
   async fn post_create(
@@ -167,6 +171,16 @@ impl super::KomodoResource for Server {
     _update: &mut Update,
   ) -> anyhow::Result<()> {
     refresh_server_cache(created, true).await;
+    if created.config.reverse_proxy.enabled {
+      periphery_client(created)
+        .await?
+        .request(EnsureReverseProxy {
+          server_id: created.id.clone(),
+          config: created.config.reverse_proxy.clone(),
+        })
+        .await
+        .context("Failed to start managed reverse proxy")?;
+    }
     Ok(())
   }
 
@@ -177,18 +191,40 @@ impl super::KomodoResource for Server {
   }
 
   async fn validate_update_config(
-    _id: &str,
-    _config: &mut Self::PartialConfig,
-    _user: &User,
+    id: &str,
+    config: &mut Self::PartialConfig,
+    user: &User,
   ) -> anyhow::Result<()> {
-    Ok(())
+    validate_reverse_proxy(config.reverse_proxy.as_mut(), id, user)
+      .await
   }
 
   async fn post_update(
     updated: &Self,
-    _update: &mut Update,
+    update: &mut Update,
   ) -> anyhow::Result<()> {
     refresh_server_cache(updated, true).await;
+    let proxy_was_enabled =
+      previous_reverse_proxy_enabled(&update.prev_toml)?;
+    if updated.config.reverse_proxy.enabled || proxy_was_enabled {
+      let periphery = periphery_client(updated).await?;
+      if updated.config.reverse_proxy.enabled {
+        periphery
+          .request(EnsureReverseProxy {
+            server_id: updated.id.clone(),
+            config: updated.config.reverse_proxy.clone(),
+          })
+          .await
+          .context("Failed to reconcile managed reverse proxy")?;
+      } else {
+        periphery
+          .request(RemoveReverseProxy {
+            server_id: updated.id.clone(),
+          })
+          .await
+          .context("Failed to remove managed reverse proxy")?;
+      }
+    }
     Ok(())
   }
 
@@ -208,6 +244,15 @@ impl super::KomodoResource for Server {
     resource: &Resource<Self::Config, Self::Info>,
     _update: &mut Update,
   ) -> anyhow::Result<()> {
+    if resource.config.reverse_proxy.enabled {
+      periphery_client(resource)
+        .await?
+        .request(RemoveReverseProxy {
+          server_id: resource.id.clone(),
+        })
+        .await
+        .context("Failed to remove managed reverse proxy")?;
+    }
     let db = db_client();
 
     let id = &resource.id;
@@ -284,6 +329,143 @@ impl super::KomodoResource for Server {
     );
     Ok(())
   }
+}
+
+fn previous_reverse_proxy_enabled(
+  previous_toml: &str,
+) -> anyhow::Result<bool> {
+  if previous_toml.is_empty() {
+    return Ok(false);
+  }
+  let document = toml::from_str::<toml::Value>(previous_toml)
+    .context("Failed to parse previous Server configuration")?;
+  Ok(
+    document
+      .get("server")
+      .and_then(toml::Value::as_array)
+      .and_then(|servers| servers.first())
+      .and_then(|server| server.get("config"))
+      .and_then(|config| config.get("reverse_proxy"))
+      .and_then(|proxy| proxy.get("enabled"))
+      .and_then(toml::Value::as_bool)
+      .unwrap_or(false),
+  )
+}
+
+#[cfg(test)]
+mod tests {
+  use super::previous_reverse_proxy_enabled;
+
+  #[test]
+  fn detects_whether_proxy_was_enabled_before_update() {
+    assert!(
+      previous_reverse_proxy_enabled(
+        r#"
+[[server]]
+name = "prod"
+[server.config.reverse_proxy]
+enabled = true
+"#,
+      )
+      .unwrap()
+    );
+    assert!(
+      !previous_reverse_proxy_enabled(
+        r#"
+[[server]]
+name = "prod"
+[server.config]
+address = "https://periphery.example.com"
+"#,
+      )
+      .unwrap()
+    );
+  }
+}
+
+async fn validate_reverse_proxy(
+  config: Option<&mut ReverseProxyConfig>,
+  server_id: &str,
+  user: &User,
+) -> anyhow::Result<()> {
+  let Some(config) = config else {
+    return Ok(());
+  };
+  if config.http_port == 0 || config.https_port == 0 {
+    anyhow::bail!("Reverse proxy listener ports must be nonzero.");
+  }
+  if config.http_port == config.https_port {
+    anyhow::bail!(
+      "Reverse proxy HTTP and HTTPS listener ports must be different."
+    );
+  }
+
+  let mut domains = std::collections::HashSet::new();
+  for route in &mut config.routes {
+    route.domain = route.domain.trim().to_ascii_lowercase();
+    if route.domain.starts_with("*.")
+      || !super::certificate::valid_domain(&route.domain)
+    {
+      anyhow::bail!(
+        "Reverse proxy route domains must be valid, non-wildcard DNS names."
+      );
+    }
+    if !domains.insert(route.domain.clone()) {
+      anyhow::bail!("Reverse proxy route domains must be unique.");
+    }
+    route.upstream = route.upstream.trim().to_string();
+    match &route.tls {
+      ReverseProxyTlsMode::Terminate { certificate_id } => {
+        validate_http_proxy_upstream(&route.upstream)?;
+        if server_id.is_empty() {
+          anyhow::bail!(
+            "Create the Server first, then attach certificates to its proxy routes."
+          );
+        }
+        super::certificate::validate_attachment(
+          certificate_id,
+          server_id,
+          user,
+        )
+        .await?;
+        let certificate = super::get::<
+          komodo_client::entities::certificate::Certificate,
+        >(certificate_id)
+        .await?;
+        if certificate.info.status
+          != komodo_client::entities::certificate::CertificateStatus::Ready
+        {
+          anyhow::bail!(
+            "Reverse proxy routes can only use Ready Certificates."
+          );
+        }
+        if !super::certificate::certificate_covers_domain(
+          &certificate.config.domains,
+          &route.domain,
+        ) {
+          anyhow::bail!(
+            "Certificate '{}' does not cover proxy route domain '{}'.",
+            certificate.name,
+            route.domain
+          );
+        }
+      }
+      ReverseProxyTlsMode::Passthrough => {
+        validate_tcp_proxy_upstream(&route.upstream)?;
+      }
+    }
+  }
+  Ok(())
+}
+
+fn validate_http_proxy_upstream(
+  upstream: &str,
+) -> anyhow::Result<()> {
+  komodo_proxy_config::http_upstream(upstream).map(|_| ())
+}
+
+fn validate_tcp_proxy_upstream(upstream: &str) -> anyhow::Result<()> {
+  komodo_proxy_config::tcp_upstream(upstream).map(|_| ())
 }
 
 pub async fn update_server_public_key(

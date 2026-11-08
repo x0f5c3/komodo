@@ -14,6 +14,7 @@ path = "src/main.rs"
 
 [dependencies]
 # local
+komodo_proxy_config = { path = "../../lib/proxy-config" }
 komodo_client = { workspace = true, features = ["periphery"] }
 periphery_client.workspace = true
 environment.workspace = true
@@ -48,6 +49,8 @@ tokio-util.workspace = true
 arc-swap.workspace = true
 colored.workspace = true
 tracing.workspace = true
+chrono.workspace = true
+x509-parser = "0.16.0"
 bollard.workspace = true
 sysinfo.workspace = true
 dotenvy.workspace = true

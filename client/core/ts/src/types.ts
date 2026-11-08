@@ -233,7 +233,7 @@ export interface ActionQuerySpecifics {
 
 export type ActionQuery = ResourceQuery<ActionQuerySpecifics>;
 
-export type AlerterEndpoint = 
+export type AlerterEndpoint =
 	/** Send alert serialized to JSON to an http endpoint. */
 	| { type: "Custom", params: CustomAlerterEndpoint }
 	/** Send alert to a Slack app */
@@ -246,7 +246,7 @@ export type AlerterEndpoint =
 	| { type: "Pushover", params: PushoverAlerterEndpoint };
 
 /** Used to reference a specific resource across all resource types */
-export type ResourceTarget = 
+export type ResourceTarget =
 	| { type: "System", id: string }
 	| { type: "Swarm", id: string }
 	| { type: "Server", id: string }
@@ -258,6 +258,7 @@ export type ResourceTarget =
 	| { type: "Action", id: string }
 	| { type: "Builder", id: string }
 	| { type: "Alerter", id: string }
+	| { type: "Certificate", id: string }
 	| { type: "ResourceSync", id: string };
 
 /** Types of maintenance schedules */
@@ -383,7 +384,7 @@ export interface CheckStackForUpdateResponse {
 
 export type BatchCheckStackForUpdateResponse = CheckStackForUpdateResponse[];
 
-export type BatchExecutionResponseItem = 
+export type BatchExecutionResponseItem =
 	| { status: "Ok", data: Update }
 	| { status: "Err", data: BatchExecutionResponseItemErr };
 
@@ -513,6 +514,10 @@ export enum Operation {
 	DeleteAlerter = "DeleteAlerter",
 	TestAlerter = "TestAlerter",
 	SendAlert = "SendAlert",
+	CreateCertificate = "CreateCertificate",
+	UpdateCertificate = "UpdateCertificate",
+	RenameCertificate = "RenameCertificate",
+	DeleteCertificate = "DeleteCertificate",
 	ClearRepoCache = "ClearRepoCache",
 	BackupCoreDatabase = "BackupCoreDatabase",
 	GlobalAutoUpdate = "GlobalAutoUpdate",
@@ -857,7 +862,7 @@ export interface BuildQuerySpecifics {
 
 export type BuildQuery = ResourceQuery<BuildQuerySpecifics>;
 
-export type BuilderConfig = 
+export type BuilderConfig =
 	/** Use a Periphery address as a Builder. */
 	| { type: "Url", params: UrlBuilderConfig }
 	/** Use a connected server as a Builder. */
@@ -885,8 +890,54 @@ export interface BuilderQuerySpecifics {
 
 export type BuilderQuery = ResourceQuery<BuilderQuerySpecifics>;
 
+export type CertificateIssuer =
+	| { type: "acme_cloudflare", params: {
+	/** Name of the Core config secret containing a scoped Cloudflare API token. */
+	api_token_secret: string;
+	email?: string;
+}}
+	| { type: "tailscale", params?: undefined };
+
+export interface CertificateConfig {
+	/** The server where this certificate will be issued and stored. */
+	server_id?: string;
+	/** DNS names covered by this certificate. */
+	domains?: string[];
+	/**
+	 * The certificate issuer. Credentials are referenced by name and are not
+	 * stored in this resource.
+	 */
+	issuer?: CertificateIssuer;
+}
+
+export enum CertificateStatus {
+	Pending = "pending",
+	Ready = "ready",
+	Error = "error",
+}
+
+export interface CertificateInfo {
+	status?: CertificateStatus;
+	expires_at?: I64;
+	last_error?: string;
+}
+
+export type Certificate = Resource<CertificateConfig, CertificateInfo>;
+
+export interface CertificateListItemInfo {
+	server_id: string;
+	domains: string[];
+	issuer: CertificateIssuer;
+	status: CertificateStatus;
+	expires_at?: I64;
+}
+
+export type CertificateListItem = ResourceListItem<CertificateListItemInfo>;
+
+export type CertificateQuery = ResourceQuery<undefined>;
+
 /** A wrapper for all Komodo exections. */
-export type Execution = 
+export type Execution =
 	/** The "null" execution. Does nothing. */
 	| { type: "None", params: NoData }
 	/** Deploy the target stack. (alias: `stack`, `st`) */
@@ -1123,7 +1174,7 @@ export interface ImageRegistryAccount {
 
 export type CreateImageRegistryAccountResponse = ImageRegistryAccount;
 
-export type UserConfig = 
+export type UserConfig =
 	/** User that logs in with username / password */
 	| { type: "Local", data: {
 	password: string;
@@ -1296,7 +1347,7 @@ export type DeleteUserResponse = User;
 
 export type DeleteVariableResponse = Variable;
 
-export type DeploymentImage = 
+export type DeploymentImage =
 	/** Deploy any external image. */
 	| { type: "Image", params: {
 	/** The docker image, can be from any registry that works with docker and that the host server can reach. */
@@ -1312,6 +1363,21 @@ export type DeploymentImage =
 	 */
 	version?: Version;
 }};
+
+export enum CertificateRefreshBehavior {
+	Restart = "restart",
+	HotReload = "hot_reload",
+}
+
+export interface DeploymentCertificateAttachment {
+	certificate_id: string;
+	/**
+	 * Directory inside the container. `current/tls.crt` and
+	 * `current/tls.key` are available below this path.
+	 */
+	mount_path: string;
+	refresh?: CertificateRefreshBehavior;
+}
 
 export enum RestartMode {
 	NoRestart = "no",
@@ -1383,6 +1449,8 @@ export interface DeploymentConfig {
 	 * Default is `host`.
 	 */
 	network: string;
+	/** Certificates managed by Komodo and mounted read-only into the container. */
+	certificate_mounts?: DeploymentCertificateAttachment[];
 	/** The restart mode given to the container. */
 	restart?: RestartMode;
 	/**
@@ -1611,7 +1679,7 @@ export enum SeverityLevel {
 }
 
 /** The variants of data related to the alert. */
-export type AlertData = 
+export type AlertData =
 	/** A null alert */
 	| { type: "None", data: {
 }}
@@ -1907,6 +1975,8 @@ export type GetBuildActionStateResponse = BuildActionState;
 export type GetBuildResponse = Build;
 
 export type GetBuilderResponse = Builder;
+
+export type GetCertificateResponse = Certificate;
 
 export type GetContainerLogResponse = Log;
 
@@ -2223,7 +2293,7 @@ export interface ResourceSyncConfig {
 	file_contents?: string;
 }
 
-export type DiffData = 
+export type DiffData =
 	/** Resource will be created */
 	| { type: "Create", data: {
 	/** The name of resource to create */
@@ -2332,6 +2402,26 @@ export interface ServerActionState {
 
 export type GetServerActionStateResponse = ServerActionState;
 
+export type ReverseProxyTlsMode =
+	| { type: "terminate", params: {
+	certificate_id: string;
+}}
+	| { type: "passthrough", params?: undefined };
+
+export interface ReverseProxyRoute {
+	domain: string;
+	/** An HTTP(S) URL for terminated TLS, or host:port for passthrough. */
+	upstream: string;
+	tls: ReverseProxyTlsMode;
+}
+
+export interface ReverseProxyConfig {
+	enabled?: boolean;
+	http_port: number;
+	https_port: number;
+	routes?: ReverseProxyRoute[];
+}
+
 /** Server configuration. */
 export interface ServerConfig {
 	/**
@@ -2339,6 +2429,11 @@ export interface ServerConfig {
 	 * If unset, Server expects Periphery -> Core connection.
 	 */
 	address?: string;
+	/**
+	 * Komodo-managed Pingora reverse proxy. Routes use upstream URLs that
+	 * are reachable from the proxy container.
+	 */
+	reverse_proxy?: ReverseProxyConfig;
 	/**
 	 * Only relevant for Core -> Periphery connections.
 	 * Whether to skip Periphery tls certificate validation.
@@ -2449,6 +2544,17 @@ export type GetStackActionStateResponse = StackActionState;
 
 export type GetStackLogResponse = Log;
 
+export interface StackCertificateAttachment {
+	certificate_id: string;
+	service: string;
+	/**
+	 * Directory inside the Compose service. `current/tls.crt` and
+	 * `current/tls.key` are available below this path.
+	 */
+	mount_path: string;
+	refresh?: CertificateRefreshBehavior;
+}
+
 /**
  * Additional env file configuration for Stack.
  * Supports backward compatibility with string-only format.
@@ -2502,6 +2608,8 @@ export interface StackConfig {
 	server_id?: string;
 	/** Configure quick links that are displayed in the resource header */
 	links?: string[];
+	/** Certificates managed by Komodo and mounted read-only into Compose services. */
+	certificate_mounts?: StackCertificateAttachment[];
 	/**
 	 * Optionally specify a custom project name for the stack.
 	 * If this is empty string, it will default to the stack name.
@@ -5144,6 +5252,8 @@ export type ListBuildersResponse = BuilderListItem[];
 
 export type ListBuildsResponse = BuildListItem[];
 
+export type ListCertificatesResponse = CertificateListItem[];
+
 export type ListCommonBuildExtraArgsResponse = string[];
 
 export type ListCommonDeploymentExtraArgsResponse = string[];
@@ -5174,6 +5284,8 @@ export type ListFullAlertersResponse = Alerter[];
 export type ListFullBuildersResponse = Builder[];
 
 export type ListFullBuildsResponse = Build[];
+
+export type ListFullCertificatesResponse = Certificate[];
 
 export type ListFullDeploymentsResponse = Deployment[];
 
@@ -5287,7 +5399,7 @@ export type ListNetworksResponse = NetworkListItem[];
 
 export type ListOnboardingKeysResponse = OnboardingKey[];
 
-export type UserTarget = 
+export type UserTarget =
 	/** User Id */
 	| { type: "User", id: string }
 	/** UserGroup Id */
@@ -5835,7 +5947,7 @@ export type ListSystemProcessesResponse = SystemProcess[];
 
 export type ListTagsResponse = Tag[];
 
-export type TerminalTarget = 
+export type TerminalTarget =
 	| { type: "Server", params: {
 	server?: string;
 }}
@@ -6044,6 +6156,8 @@ export type _PartialAwsBuilderConfig = Partial<AwsBuilderConfig>;
 export type _PartialBuildConfig = Partial<BuildConfig>;
 
 export type _PartialBuilderConfig = Partial<BuilderConfig>;
+
+export type _PartialCertificateConfig = Partial<CertificateConfig>;
 
 export type _PartialDeploymentConfig = Partial<DeploymentConfig>;
 
@@ -6975,6 +7089,11 @@ export interface CopyBuilder {
 	id: string;
 }
 
+export interface CopyCertificate {
+	name: string;
+	id: string;
+}
+
 /**
  * Creates a new deployment with given `name` and the configuration
  * of the deployment at the given `id`. Response: [Deployment]
@@ -7095,7 +7214,7 @@ export interface CreateBuild {
 }
 
 /** Partial representation of [BuilderConfig] */
-export type PartialBuilderConfig = 
+export type PartialBuilderConfig =
 	| { type: "Url", params: _PartialUrlBuilderConfig }
 	| { type: "Server", params: _PartialServerBuilderConfig }
 	| { type: "Aws", params: _PartialAwsBuilderConfig };
@@ -7106,6 +7225,11 @@ export interface CreateBuilder {
 	name: string;
 	/** Optional partial config to initialize the builder with. */
 	config?: PartialBuilderConfig;
+}
+
+export interface CreateCertificate {
+	name: string;
+	config?: _PartialCertificateConfig;
 }
 
 /** Create a deployment. Response: [Deployment]. */
@@ -7435,6 +7559,10 @@ export interface DeleteBuild {
  */
 export interface DeleteBuilder {
 	/** The id or name of the builder to delete. */
+	id: string;
+}
+
+export interface DeleteCertificate {
 	id: string;
 }
 
@@ -7837,6 +7965,8 @@ export interface ResourcesToml {
 	alerters?: ResourceToml<_PartialAlerterConfig>[];
 	/** Declare a builder */
 	builders?: ResourceToml<_PartialBuilderConfig>[];
+	/** Declare a certificate */
+	certificates?: ResourceToml<_PartialCertificateConfig>[];
 	/** Declare a resource sync */
 	resource_syncs?: ResourceToml<_PartialResourceSyncConfig>[];
 	/** Declare a user group */
@@ -8078,6 +8208,10 @@ export interface GetBuildsSummaryResponse {
 	building: number;
 	/** The number of builds with unknown state. */
 	unknown: number;
+}
+
+export interface GetCertificate {
+	certificate: string;
 }
 
 /**
@@ -9251,6 +9385,13 @@ export interface ListBuilds {
 	sort_desc?: boolean;
 }
 
+export interface ListCertificates {
+	query?: CertificateQuery;
+	page?: U64;
+	limit?: U64;
+	sort_desc?: boolean;
+}
+
 /**
  * Gets a list of existing values used as extra args across other builds.
  * Useful to offer suggestions. Response: [ListCommonBuildExtraArgsResponse]
@@ -9435,6 +9576,12 @@ export interface ListFullBuilds {
 	 * Note: the page logic relies on this being consistent
 	 * across queries for more pages.
 	 */
+	limit?: U64;
+}
+
+export interface ListFullCertificates {
+	query?: CertificateQuery;
+	page?: U64;
 	limit?: U64;
 }
 
@@ -10595,6 +10742,11 @@ export interface RenameBuilder {
 	name: string;
 }
 
+export interface RenameCertificate {
+	id: string;
+	name: string;
+}
+
 /**
  * Rename the deployment at id to the given name. Response: [Update].
  * 
@@ -11406,6 +11558,11 @@ export interface UpdateBuilder {
 	config: PartialBuilderConfig;
 }
 
+export interface UpdateCertificate {
+	id: string;
+	config: _PartialCertificateConfig;
+}
+
 /**
  * Update the deployment at the given id, and return the updated deployment.
  * Response: [Deployment].
@@ -11810,7 +11967,7 @@ export enum DayOfWeek {
 	Sunday = "Sunday",
 }
 
-export type ExecuteRequest = 
+export type ExecuteRequest =
 	| { type: "DeployStack", params: DeployStack }
 	| { type: "BatchDeployStack", params: BatchDeployStack }
 	| { type: "DeployStackIfChanged", params: DeployStackIfChanged }
@@ -11977,7 +12134,7 @@ export enum IanaTimezone {
 	PacificKiritimati = "Pacific/Kiritimati",
 }
 
-export type ReadRequest = 
+export type ReadRequest =
 	| { type: "GetVersion", params: GetVersion }
 	| { type: "GetCoreInfo", params: GetCoreInfo }
 	| { type: "ListSecrets", params: ListSecrets }
@@ -12064,6 +12221,9 @@ export type ReadRequest =
 	| { type: "ListBuilds", params: ListBuilds }
 	| { type: "ListFullBuilds", params: ListFullBuilds }
 	| { type: "ListCommonBuildExtraArgs", params: ListCommonBuildExtraArgs }
+	| { type: "GetCertificate", params: GetCertificate }
+	| { type: "ListCertificates", params: ListCertificates }
+	| { type: "ListFullCertificates", params: ListFullCertificates }
 	| { type: "GetReposSummary", params: GetReposSummary }
 	| { type: "GetRepo", params: GetRepo }
 	| { type: "GetRepoActionState", params: GetRepoActionState }
@@ -12174,7 +12334,7 @@ export enum SyncWebhookAction {
 	Sync = "Sync",
 }
 
-export type WriteRequest = 
+export type WriteRequest =
 	| { type: "UpdateResourceMeta", params: UpdateResourceMeta }
 	| { type: "CreateSwarm", params: CreateSwarm }
 	| { type: "CopySwarm", params: CopySwarm }
@@ -12251,6 +12411,11 @@ export type WriteRequest =
 	| { type: "DeleteAlerter", params: DeleteAlerter }
 	| { type: "UpdateAlerter", params: UpdateAlerter }
 	| { type: "RenameAlerter", params: RenameAlerter }
+	| { type: "CreateCertificate", params: CreateCertificate }
+	| { type: "CopyCertificate", params: CopyCertificate }
+	| { type: "DeleteCertificate", params: DeleteCertificate }
+	| { type: "UpdateCertificate", params: UpdateCertificate }
+	| { type: "RenameCertificate", params: RenameCertificate }
 	| { type: "CreateOnboardingKey", params: CreateOnboardingKey }
 	| { type: "UpdateOnboardingKey", params: UpdateOnboardingKey }
 	| { type: "DeleteOnboardingKey", params: DeleteOnboardingKey }
@@ -12290,7 +12455,7 @@ export type WriteRequest =
 	| { type: "DeleteImageRegistryAccount", params: DeleteImageRegistryAccount }
 	| { type: "CloseAlert", params: CloseAlert };
 
-export type WsLoginMessage = 
+export type WsLoginMessage =
 	| { type: "Jwt", params: {
 	jwt: string;
 }}
@@ -12298,4 +12463,3 @@ export type WsLoginMessage =
 	key: string;
 	secret: string;
 }};
-

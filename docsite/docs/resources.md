@@ -14,6 +14,7 @@ All resources which depend on git repos / docker registries are able to use thes
 
 - Configure the connection to periphery agents.
 - Set alerting thresholds.
+- Manage a dedicated reverse proxy and server-local TLS certificates.
 - Can be attached to by **Deployments**, **Stacks**, **Repos**, and **Builders**.
 
 ## [Swarm](swarm)

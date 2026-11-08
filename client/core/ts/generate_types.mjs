@@ -8,17 +8,22 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 console.log("generating typescript types...");
 
 const gen_command =
-  "RUST_BACKTRACE=1 typeshare . --lang=typescript --output-file=./client/core/ts/src/types.ts";
+  "typeshare . --lang=typescript --output-file=./client/core/ts/src/types.ts";
 
-exec(gen_command, (error, _stdout, _stderr) => {
+exec(
+  gen_command,
+  { env: { ...process.env, RUST_BACKTRACE: "1" } },
+  (error, _stdout, _stderr) => {
   if (error) {
     console.error(error);
+    process.exitCode = 1;
     return;
   }
   console.log("generated types using typeshare");
   fix_types();
   console.log("finished.");
-});
+  },
+);
 
 function fix_types() {
   const types_path = __dirname + "/src/types.ts";
@@ -34,6 +39,7 @@ function fix_types() {
     // Add '| string' to env vars
     .replaceAll("EnvironmentVar[]", "EnvironmentVar[] | string")
     .replaceAll("IndexSet", "Array")
+    .replaceAll(" = \n", " =\n")
     .replaceAll(
       ": PermissionLevelAndSpecifics",
       ": PermissionLevelAndSpecifics | PermissionLevel"

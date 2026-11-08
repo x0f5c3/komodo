@@ -1,4 +1,4 @@
-use std::fmt::Write;
+use std::{borrow::Cow, fmt::Write};
 
 use anyhow::Context;
 use command::{
@@ -19,6 +19,7 @@ use mogh_resolver::Resolve;
 use periphery_client::api::container::{
   RemoveContainer, RunContainer,
 };
+use shell_escape::unix::escape;
 use tracing::Instrument;
 
 use crate::{
@@ -75,6 +76,33 @@ impl Resolve<crate::api::Args> for RunContainer {
       ));
     };
 
+    let mut certificate_mounts = Vec::new();
+    for attachment in &deployment.config.certificate_mounts {
+      let source = crate::api::certificate::certificate_mount_source(
+        &attachment.certificate_id,
+      )
+      .await?;
+      if !attachment.mount_path.starts_with('/')
+        || attachment.mount_path == "/"
+        || attachment.mount_path.contains(':')
+        || attachment.mount_path.contains(',')
+        || attachment.mount_path.contains('\\')
+        || attachment.mount_path.contains('\0')
+        || attachment
+          .mount_path
+          .split('/')
+          .any(|part| part == "." || part == "..")
+      {
+        anyhow::bail!("Invalid certificate mount path");
+      }
+      certificate_mounts
+        .push((source, attachment.mount_path.clone()));
+    }
+
+    let command =
+      docker_run_command(&deployment, image, &certificate_mounts)
+        .context("Unable to generate valid docker run command")?;
+
     if let Err(e) = docker_login(
       &extract_registry_domain(image)?,
       &deployment.config.image_registry_account,
@@ -104,9 +132,6 @@ impl Resolve<crate::api::Args> for RunContainer {
     .await;
     debug!("container stopped and removed");
 
-    let command = docker_run_command(&deployment, image)
-      .context("Unable to generate valid docker run command")?;
-
     let span = info_span!("ExecuteDockerRun");
     let Some(log) = run_komodo_command_with_sanitization(
       "Docker Run",
@@ -130,6 +155,7 @@ impl Resolve<crate::api::Args> for RunContainer {
 fn docker_run_command(
   deployment: &Deployment,
   image: &str,
+  certificate_mounts: &[(std::path::PathBuf, String)],
 ) -> anyhow::Result<String> {
   let name = deployment.custom_name();
   let DeploymentConfig {
@@ -151,6 +177,11 @@ fn docker_run_command(
     &conversions_from_str(ports).context("Invalid ports")?,
     "-p",
   )?;
+
+  for (source, mount_path) in certificate_mounts {
+    let volume = format!("{}:{mount_path}:ro", source.display());
+    write!(&mut res, " -v {}", escape(Cow::Owned(volume)))?;
+  }
 
   push_conversions(
     &mut res,

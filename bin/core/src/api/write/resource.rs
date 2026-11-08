@@ -3,9 +3,9 @@ use komodo_client::{
   api::write::{UpdateResourceMeta, UpdateResourceMetaResponse},
   entities::{
     ResourceTarget, action::Action, alerter::Alerter, build::Build,
-    builder::Builder, deployment::Deployment, procedure::Procedure,
-    repo::Repo, server::Server, stack::Stack, swarm::Swarm,
-    sync::ResourceSync,
+    builder::Builder, certificate::Certificate,
+    deployment::Deployment, procedure::Procedure, repo::Repo,
+    server::Server, stack::Stack, swarm::Swarm, sync::ResourceSync,
   },
 };
 use mogh_error::AddStatusCodeError;
@@ -78,6 +78,9 @@ impl Resolve<WriteArgs> for UpdateResourceMeta {
       }
       ResourceTarget::Alerter(id) => {
         resource::update_meta::<Alerter>(&id, meta, args).await?;
+      }
+      ResourceTarget::Certificate(id) => {
+        resource::update_meta::<Certificate>(&id, meta, args).await?;
       }
     }
     Ok(UpdateResourceMetaResponse {})

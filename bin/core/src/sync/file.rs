@@ -262,6 +262,7 @@ pub fn extend_resources(
     actions,
     alerters,
     builders,
+    certificates,
     resource_syncs,
   );
   resources.user_groups.extend(more.user_groups);

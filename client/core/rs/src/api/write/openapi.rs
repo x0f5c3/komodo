@@ -82,6 +82,12 @@ use crate::api::write;
     write::delete_alerter,
     write::update_alerter,
     write::rename_alerter,
+    // certificate
+    write::create_certificate,
+    write::copy_certificate,
+    write::delete_certificate,
+    write::update_certificate,
+    write::rename_certificate,
     // resource_sync
     write::create_resource_sync,
     write::copy_resource_sync,

@@ -117,6 +117,10 @@ use crate::api::read;
     read::list_full_alerters,
     read::get_alerter,
     read::get_alerters_summary,
+    // certificate
+    read::list_certificates,
+    read::list_full_certificates,
+    read::get_certificate,
     // resource_sync
     read::list_resource_syncs,
     read::list_full_resource_syncs,
