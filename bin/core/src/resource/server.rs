@@ -309,80 +309,6 @@ impl super::KomodoResource for Server {
     Ok(())
   }
 
-  async fn reconcile_reverse_proxy(
-    server: &Server,
-    previously_enabled: bool,
-  ) -> anyhow::Result<()> {
-    if server.config.reverse_proxy.enabled || previously_enabled {
-      db_client()
-        .servers
-        .update_one(
-          doc! { "_id": ObjectId::from_str(&server.id)? },
-          doc! { "$set": { "info.reverse_proxy_managed": true } },
-        )
-        .await
-        .context("Failed to persist proxy reconciliation intent")?;
-    }
-    let periphery = periphery_client(server).await?;
-    if server.config.reverse_proxy.enabled {
-      periphery
-        .request(EnsureReverseProxy {
-          server_id: server.id.clone(),
-          config: server.config.reverse_proxy.clone(),
-        })
-        .await
-        .context("Failed to reconcile managed reverse proxy")?;
-    } else {
-      periphery
-        .request(RemoveReverseProxy {
-          server_id: server.id.clone(),
-        })
-        .await
-        .context("Failed to remove managed reverse proxy")?;
-      db_client()
-        .servers
-        .update_one(
-          doc! { "_id": ObjectId::from_str(&server.id)? },
-          doc! { "$set": { "info.reverse_proxy_managed": false } },
-        )
-        .await
-        .context("Failed to acknowledge proxy removal")?;
-    }
-    Ok(())
-  }
-
-  pub(super) async fn reconcile_reverse_proxies() {
-    let _guard = super::CERTIFICATE_LIFECYCLE.lock().await;
-    let servers = match database::mungos::find::find_collect(
-      &db_client().servers,
-      doc! { "$or": [
-        { "config.reverse_proxy.enabled": true },
-        { "info.reverse_proxy_managed": true }
-      ] },
-      None,
-    )
-    .await
-    {
-      Ok(servers) => servers,
-      Err(error) => {
-        error!(
-          "Failed to load Servers for proxy reconciliation | {error:#}"
-        );
-        return;
-      }
-    };
-    for server in servers {
-      if let Err(error) =
-        reconcile_reverse_proxy(&server, false).await
-      {
-        error!(
-          "Managed proxy reconciliation failed | {} | {error:#}",
-          server.name
-        );
-      }
-    }
-  }
-
   async fn post_delete(
     resource: &Resource<Self::Config, Self::Info>,
     _update: &mut Update,
@@ -392,6 +318,79 @@ impl super::KomodoResource for Server {
       periphery_connections().remove(&resource.id),
     );
     Ok(())
+  }
+}
+
+async fn reconcile_reverse_proxy(
+  server: &Server,
+  previously_enabled: bool,
+) -> anyhow::Result<()> {
+  if server.config.reverse_proxy.enabled || previously_enabled {
+    db_client()
+      .servers
+      .update_one(
+        doc! { "_id": ObjectId::from_str(&server.id)? },
+        doc! { "$set": { "info.reverse_proxy_managed": true } },
+      )
+      .await
+      .context("Failed to persist proxy reconciliation intent")?;
+  }
+  let periphery = periphery_client(server).await?;
+  if server.config.reverse_proxy.enabled {
+    periphery
+      .request(EnsureReverseProxy {
+        server_id: server.id.clone(),
+        config: server.config.reverse_proxy.clone(),
+      })
+      .await
+      .context("Failed to reconcile managed reverse proxy")?;
+  } else {
+    periphery
+      .request(RemoveReverseProxy {
+        server_id: server.id.clone(),
+      })
+      .await
+      .context("Failed to remove managed reverse proxy")?;
+    db_client()
+      .servers
+      .update_one(
+        doc! { "_id": ObjectId::from_str(&server.id)? },
+        doc! { "$set": { "info.reverse_proxy_managed": false } },
+      )
+      .await
+      .context("Failed to acknowledge proxy removal")?;
+  }
+  Ok(())
+}
+
+pub(super) async fn reconcile_reverse_proxies() {
+  let _guard = super::CERTIFICATE_LIFECYCLE.lock().await;
+  let servers = match database::mungos::find::find_collect(
+    &db_client().servers,
+    doc! { "$or": [
+      { "config.reverse_proxy.enabled": true },
+      { "info.reverse_proxy_managed": true }
+    ] },
+    None,
+  )
+  .await
+  {
+    Ok(servers) => servers,
+    Err(error) => {
+      error!(
+        "Failed to load Servers for proxy reconciliation | {error:#}"
+      );
+      return;
+    }
+  };
+  for server in servers {
+    if let Err(error) = reconcile_reverse_proxy(&server, false).await
+    {
+      error!(
+        "Managed proxy reconciliation failed | {} | {error:#}",
+        server.name
+      );
+    }
   }
 }
 
