@@ -43,6 +43,7 @@ mod alert;
 mod alerter;
 mod build;
 mod builder;
+mod certificate;
 mod deployment;
 mod docker;
 mod onboarding_key;
@@ -197,6 +198,11 @@ enum ReadRequest {
   ListBuilds(ListBuilds),
   ListFullBuilds(ListFullBuilds),
   ListCommonBuildExtraArgs(ListCommonBuildExtraArgs),
+
+  // ==== CERTIFICATE ====
+  GetCertificate(GetCertificate),
+  ListCertificates(ListCertificates),
+  ListFullCertificates(ListFullCertificates),
 
   // ==== REPO ====
   GetReposSummary(GetReposSummary),

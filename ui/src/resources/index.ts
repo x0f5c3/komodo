@@ -12,6 +12,7 @@ import { ProcedureComponents } from "./procedure";
 import { ResourceSyncComponents } from "./sync";
 import { BuilderComponents } from "./builder";
 import { AlerterComponents } from "./alerter";
+import { CertificateComponents } from "./certificate";
 import { BoxProps, TableProps } from "@mantine/core";
 
 export type UsableResourceTarget = Exclude<
@@ -26,6 +27,7 @@ export const RESOURCE_TARGETS = [
   "Stack",
   "Deployment",
   "Build",
+  "Certificate",
   "Repo",
   "Procedure",
   "Action",
@@ -54,6 +56,7 @@ export const ResourceComponents: {
   ResourceSync: ResourceSyncComponents,
   Builder: BuilderComponents,
   Alerter: AlerterComponents,
+  Certificate: CertificateComponents,
 };
 
 type IdComponent = React.FC<{ id: string }>;

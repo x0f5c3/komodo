@@ -44,6 +44,7 @@ import { DEFAULT_STACK_FILE_CONTENTS, useFullStack } from "..";
 import { ReactNode } from "react";
 import WebhookBuilder from "@/components/webhook/builder";
 import CopyWebhookUrl from "@/components/webhook/copy-url";
+import { StackCertificateAttachments } from "@/resources/certificate/attachments";
 
 type StackMode = "UI Defined" | "Files On Server" | "Git Repo" | undefined;
 const STACK_MODES = ["UI Defined", "Files On Server", "Git Repo"] as const;
@@ -455,6 +456,29 @@ export default function StackConfig({
             disabled={disabled}
             placeholder="Input link"
           />
+        ),
+      },
+    },
+    {
+      label: "Certificates",
+      description:
+        "Mount ready certificates issued on this Server into Compose services.",
+      hidden: !!currSwarmId,
+      fields: {
+        certificate_mounts: (values, set) => (
+          <ConfigItem
+            label="Certificate mounts"
+            description="The directory contains current/tls.crt and current/tls.key. Hot reload requires the application to watch and reload these files."
+          >
+            <StackCertificateAttachments
+              serverId={currServerId ?? ""}
+              attachments={values ?? []}
+              onChange={(certificate_mounts) =>
+                set({ certificate_mounts })
+              }
+              disabled={disabled || !currServerId}
+            />
+          </ConfigItem>
         ),
       },
     },

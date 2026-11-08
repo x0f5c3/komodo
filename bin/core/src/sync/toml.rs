@@ -7,6 +7,7 @@ use komodo_client::entities::{
   alerter::Alerter,
   build::Build,
   builder::{Builder, PartialBuilderConfig},
+  certificate::Certificate,
   deployment::{Deployment, DeploymentImage},
   procedure::Procedure,
   repo::Repo,
@@ -155,6 +156,7 @@ pub fn convert_resource<R: KomodoResource>(
 impl ToToml for Server {}
 impl ToToml for Action {}
 impl ToToml for Alerter {}
+impl ToToml for Certificate {}
 impl ToToml for ResourceSync {}
 
 impl ToToml for Swarm {

@@ -4,6 +4,9 @@
 ## Uses chef for dependency caching to help speed up back-to-back builds.
 
 FROM lukemathwalker/cargo-chef:latest-rust-1.98.0-bookworm AS chef
+RUN apt-get update && apt-get install -y --no-install-recommends cmake pkg-config libssl-dev \
+  && rm -rf /var/lib/apt/lists/*
+ENV OPENSSL_NO_VENDOR=1
 WORKDIR /builder
 
 # Plan just the RECIPE to see if things have changed
@@ -30,6 +33,7 @@ RUN \
   cargo build --release --bin core && \
   cargo build --release --bin periphery && \
   cargo build --release --bin km && \
+  cargo build --release --bin proxy && \
   cargo strip
 
 # Copy just the binaries to scratch image
@@ -38,6 +42,7 @@ FROM scratch
 COPY --from=builder /builder/target/release/core /core
 COPY --from=builder /builder/target/release/periphery /periphery
 COPY --from=builder /builder/target/release/km /km
+COPY --from=builder /builder/target/release/proxy /proxy
 
 LABEL org.opencontainers.image.source="https://github.com/moghtech/komodo"
 LABEL org.opencontainers.image.description="Komodo Binaries"

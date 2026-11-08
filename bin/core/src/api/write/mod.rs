@@ -23,6 +23,7 @@ mod alert;
 mod alerter;
 mod build;
 mod builder;
+mod certificate;
 mod deployment;
 mod onboarding;
 mod permissions;
@@ -161,6 +162,13 @@ pub enum WriteRequest {
   DeleteAlerter(DeleteAlerter),
   UpdateAlerter(UpdateAlerter),
   RenameAlerter(RenameAlerter),
+
+  // ==== CERTIFICATE ====
+  CreateCertificate(CreateCertificate),
+  CopyCertificate(CopyCertificate),
+  DeleteCertificate(DeleteCertificate),
+  UpdateCertificate(UpdateCertificate),
+  RenameCertificate(RenameCertificate),
 
   // ==== ONBOARDING KEY ====
   CreateOnboardingKey(CreateOnboardingKey),

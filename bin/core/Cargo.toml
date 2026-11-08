@@ -13,6 +13,7 @@ path = "src/main.rs"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+komodo_proxy_config = { path = "../../lib/proxy-config" }
 # local
 komodo_client = { workspace = true, features = ["core"] }
 periphery_client.workspace = true
@@ -46,6 +47,7 @@ aws-credential-types.workspace = true
 english-to-cron.workspace = true
 data-encoding.workspace = true
 serde_yaml_ng.workspace = true
+shlex.workspace = true
 utoipa-scalar.workspace = true
 futures-util.workspace = true
 aws-sdk-ec2.workspace = true

@@ -104,6 +104,11 @@ export type ReadResponses = {
   ListBuildVersions: Types.ListBuildVersionsResponse;
   ListCommonBuildExtraArgs: Types.ListCommonBuildExtraArgsResponse;
 
+  // ==== CERTIFICATE ====
+  GetCertificate: Types.GetCertificateResponse;
+  ListCertificates: Types.ListCertificatesResponse;
+  ListFullCertificates: Types.ListFullCertificatesResponse;
+
   // ==== REPO ====
   GetReposSummary: Types.GetReposSummaryResponse;
   GetRepo: Types.GetRepoResponse;
@@ -293,6 +298,13 @@ export type WriteResponses = {
   DeleteAlerter: Types.Alerter;
   UpdateAlerter: Types.Alerter;
   RenameAlerter: Types.Update;
+
+  // ==== CERTIFICATE ====
+  CreateCertificate: Types.Certificate;
+  CopyCertificate: Types.Certificate;
+  DeleteCertificate: Types.Certificate;
+  UpdateCertificate: Types.Certificate;
+  RenameCertificate: Types.Update;
 
   // ==== ONBOARDING KEY ====
   CreateOnboardingKey: Types.CreateOnboardingKeyResponse;

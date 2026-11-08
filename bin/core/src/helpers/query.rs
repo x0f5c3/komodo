@@ -16,6 +16,7 @@ use komodo_client::{
     alerter::Alerter,
     build::Build,
     builder::Builder,
+    certificate::Certificate,
     deployment::{Deployment, DeploymentState},
     docker::container::{
       ContainerListItem, ContainerStateStatusEnum,
@@ -367,6 +368,9 @@ pub async fn get_user_permission_on_target(
     }
     ResourceTarget::Alerter(id) => {
       get_user_permission_on_resource::<Alerter>(user, id).await
+    }
+    ResourceTarget::Certificate(id) => {
+      get_user_permission_on_resource::<Certificate>(user, id).await
     }
   }
 }

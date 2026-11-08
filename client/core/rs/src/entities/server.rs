@@ -96,6 +96,9 @@ pub struct ServerInfo {
   /// private key of the periphery agent.
   #[serde(default)]
   pub public_key: String,
+  /// Tracks managed proxy cleanup until a disabled proxy has been removed.
+  #[serde(default)]
+  pub reverse_proxy_managed: bool,
 }
 
 #[typeshare(serialized_as = "Partial<ServerConfig>")]
@@ -118,6 +121,12 @@ pub struct ServerConfig {
   #[serde(default)]
   #[builder(default)]
   pub address: String,
+
+  /// Komodo-managed Pingora reverse proxy. Routes use upstream URLs that
+  /// are reachable from the proxy container.
+  #[serde(default)]
+  #[builder(default)]
+  pub reverse_proxy: ReverseProxyConfig,
 
   /// Only relevant for Core -> Periphery connections.
   /// Whether to skip Periphery tls certificate validation.
@@ -269,6 +278,61 @@ pub struct ServerConfig {
   pub maintenance_windows: Vec<MaintenanceWindow>,
 }
 
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct ReverseProxyConfig {
+  #[serde(default)]
+  pub enabled: bool,
+  #[serde(default = "default_proxy_http_port")]
+  pub http_port: u16,
+  #[serde(default = "default_proxy_https_port")]
+  pub https_port: u16,
+  #[serde(default)]
+  pub routes: Vec<ReverseProxyRoute>,
+}
+
+impl Default for ReverseProxyConfig {
+  fn default() -> Self {
+    Self {
+      enabled: false,
+      http_port: default_proxy_http_port(),
+      https_port: default_proxy_https_port(),
+      routes: Vec::new(),
+    }
+  }
+}
+
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct ReverseProxyRoute {
+  pub domain: String,
+  /// An HTTP(S) URL for terminated TLS, or host:port for passthrough.
+  pub upstream: String,
+  pub tls: ReverseProxyTlsMode,
+}
+
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(tag = "type", content = "params", rename_all = "snake_case")]
+pub enum ReverseProxyTlsMode {
+  Terminate { certificate_id: String },
+  Passthrough,
+}
+
+fn default_proxy_http_port() -> u16 {
+  80
+}
+
+fn default_proxy_https_port() -> u16 {
+  443
+}
+
 impl ServerConfig {
   pub fn builder() -> ServerConfigBuilder {
     ServerConfigBuilder::default()
@@ -328,6 +392,7 @@ impl Default for ServerConfig {
   fn default() -> Self {
     Self {
       address: Default::default(),
+      reverse_proxy: Default::default(),
       insecure_tls: default_insecure_tls(),
       external_address: Default::default(),
       enabled: default_enabled(),

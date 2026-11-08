@@ -11,11 +11,11 @@ use komodo_client::{
   },
   entities::{
     ResourceTarget, action::Action, alerter::Alerter, build::Build,
-    builder::Builder, deployment::Deployment,
-    permission::PermissionLevel, procedure::Procedure, repo::Repo,
-    resource::ResourceQuery, server::Server, stack::Stack,
-    swarm::Swarm, sync::ResourceSync, toml::ResourcesToml,
-    user::User,
+    builder::Builder, certificate::Certificate,
+    deployment::Deployment, permission::PermissionLevel,
+    procedure::Procedure, repo::Repo, resource::ResourceQuery,
+    server::Server, stack::Stack, swarm::Swarm, sync::ResourceSync,
+    toml::ResourcesToml, user::User,
   },
 };
 use mogh_resolver::Resolve;
@@ -72,6 +72,7 @@ async fn get_all_targets(
   extend_targets!(
     Alerter,
     Builder,
+    Certificate,
     Server,
     Swarm,
     Stack,
@@ -191,6 +192,9 @@ impl Resolve<ReadArgs> for ExportResourcesToToml {
         ResourceTarget::Alerter(id) => {
           convert_target!(id, Alerter, alerters)
         }
+        ResourceTarget::Certificate(id) => {
+          convert_target!(id, Certificate, certificates)
+        }
         ResourceTarget::ResourceSync(id) => {
           let mut sync = get_check_permissions::<ResourceSync>(
             &id,
@@ -294,6 +298,7 @@ fn serialize_resources_toml(
     (Action, actions, "action"),
     (Alerter, alerters, "alerter"),
     (Builder, builders, "builder"),
+    (Certificate, certificates, "certificate"),
     (ResourceSync, resource_syncs, "resource_sync"),
   );
 

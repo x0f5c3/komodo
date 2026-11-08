@@ -58,6 +58,7 @@ mod action;
 mod alerter;
 mod build;
 mod builder;
+mod certificate;
 mod deployment;
 mod procedure;
 mod refresh;
@@ -67,6 +68,52 @@ mod stack;
 mod swarm;
 mod sync;
 
+// Issuance and Certificate, Server, and workload mutations share one gate so
+// no configuration or deletion can overtake an in-flight host operation.
+pub(crate) static CERTIFICATE_LIFECYCLE: tokio::sync::Mutex<()> =
+  tokio::sync::Mutex::const_new(());
+
+async fn certificate_lifecycle_guard<T: KomodoResource>()
+-> Option<tokio::sync::MutexGuard<'static, ()>> {
+  if matches!(
+    T::resource_type(),
+    ResourceTargetVariant::Certificate
+      | ResourceTargetVariant::Server
+      | ResourceTargetVariant::Deployment
+      | ResourceTargetVariant::Stack
+  ) {
+    Some(CERTIFICATE_LIFECYCLE.lock().await)
+  } else {
+    None
+  }
+}
+
+#[cfg(test)]
+mod certificate_lifecycle_tests {
+  use super::certificate_lifecycle_guard;
+  use komodo_client::entities::{
+    deployment::Deployment, stack::Stack,
+  };
+
+  #[tokio::test]
+  async fn workload_attachment_writes_share_the_lifecycle_gate() {
+    let deployment =
+      certificate_lifecycle_guard::<Deployment>().await.expect(
+        "Deployment mutations must guard Certificate attachments",
+      );
+    assert!(
+      tokio::time::timeout(
+        std::time::Duration::from_millis(10),
+        certificate_lifecycle_guard::<Stack>(),
+      )
+      .await
+      .is_err()
+    );
+    drop(deployment);
+    assert!(certificate_lifecycle_guard::<Stack>().await.is_some());
+  }
+}
+
 pub use action::{
   refresh_action_state_cache, spawn_action_state_refresh_loop,
 };
@@ -74,6 +121,7 @@ pub use build::{
   get_build_state, refresh_build_state_cache,
   spawn_build_state_refresh_loop,
 };
+pub use certificate::*;
 pub use deployment::setup_deployment_execution;
 pub use procedure::{
   refresh_procedure_state_cache, spawn_procedure_state_refresh_loop,
@@ -614,6 +662,7 @@ pub async fn create<T: KomodoResource>(
   info: Option<T::Info>,
   user: &User,
 ) -> mogh_error::Result<Resource<T::Config, T::Info>> {
+  let _guard = certificate_lifecycle_guard::<T>().await;
   if !T::user_can_create(user) {
     return Err(
       anyhow!(
@@ -734,6 +783,7 @@ pub async fn update<T: KomodoResource>(
   mut config: T::PartialConfig,
   user: &User,
 ) -> anyhow::Result<Resource<T::Config, T::Info>> {
+  let _guard = certificate_lifecycle_guard::<T>().await;
   let resource = get_check_permissions::<T>(
     id_or_name,
     user,
@@ -840,6 +890,9 @@ fn resource_target<T: KomodoResource>(id: String) -> ResourceTarget {
     }
     ResourceTargetVariant::Builder => ResourceTarget::Builder(id),
     ResourceTargetVariant::Alerter => ResourceTarget::Alerter(id),
+    ResourceTargetVariant::Certificate => {
+      ResourceTarget::Certificate(id)
+    }
   }
 }
 
@@ -995,6 +1048,7 @@ pub async fn delete<T: KomodoResource>(
   id_or_name: &str,
   user: &User,
 ) -> anyhow::Result<Resource<T::Config, T::Info>> {
+  let _guard = certificate_lifecycle_guard::<T>().await;
   let resource = get_check_permissions::<T>(
     id_or_name,
     user,
@@ -1135,6 +1189,7 @@ where
     ResourceTarget::ResourceSync(id) => ("recents.ResourceSync", id),
     ResourceTarget::Builder(id) => ("recents.Builder", id),
     ResourceTarget::Alerter(id) => ("recents.Alerter", id),
+    ResourceTarget::Certificate(id) => ("recents.Certificate", id),
     ResourceTarget::System(_) => return,
   };
   if let Err(e) = db_client()

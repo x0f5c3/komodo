@@ -9,6 +9,9 @@ import { ICONS } from "@/lib/icons";
 import { Group } from "@mantine/core";
 import { useIsServerAvailable } from "./hooks";
 import ConfigMaintenanceWindows from "@/components/maintenance-windows";
+import ReverseProxyConfigEditor, {
+  getReverseProxyConfig,
+} from "./config/reverse-proxy";
 
 export default function ServerConfig({
   id,
@@ -143,6 +146,23 @@ export default function ServerConfig({
               },
             },
           },
+          {
+              label: "Reverse Proxy",
+              description:
+                "Run a Komodo-managed Pingora container with certificate-aware routes on this Server.",
+              fields: {
+                reverse_proxy: (_, set) => (
+                  <ReverseProxyConfigEditor
+                    serverId={id}
+                    config={getReverseProxyConfig(
+                      update.reverse_proxy ?? config.reverse_proxy,
+                    )}
+                    onChange={(reverse_proxy) => set({ reverse_proxy })}
+                    disabled={disabled}
+                  />
+                ),
+              },
+            },
           {
             label: "Disks",
             labelHidden: true,

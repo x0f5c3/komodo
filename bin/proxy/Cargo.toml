@@ -1,0 +1,38 @@
+[package]
+name = "komodo_proxy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "proxy"
+path = "src/main.rs"
+
+[dependencies]
+komodo_proxy_config = { path = "../../lib/proxy-config" }
+pingora-core = { version = "0.9.1", default-features = false }
+pingora-proxy = { version = "0.9.1", default-features = false }
+pingora-http = "0.9.1"
+async-trait = "0.1.89"
+env_logger = "0.11.8"
+log = "0.4.29"
+anyhow.workspace = true
+arc-swap.workspace = true
+serde_json.workspace = true
+rustls.workspace = true
+rustls-pemfile = "2.2.0"
+tokio.workspace = true
+url.workspace = true
+openssl = { version = "0.10.79", optional = true }
+
+[features]
+default = ["rustls"]
+rustls = ["pingora-core/rustls", "pingora-proxy/rustls"]
+openssl = ["dep:openssl", "pingora-core/openssl", "pingora-proxy/openssl"]
+
+[dev-dependencies]
+axum.workspace = true
+reqwest = { workspace = true, features = ["http2"] }
+tokio-tungstenite.workspace = true
+tempfile = "3.26.0"
+openssl = "0.10.79"

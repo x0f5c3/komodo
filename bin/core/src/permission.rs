@@ -14,6 +14,7 @@ use komodo_client::{
     alerter::Alerter,
     build::Build,
     builder::Builder,
+    certificate::Certificate,
     deployment::Deployment,
     permission::SpecificPermission,
     permission::{
@@ -741,6 +742,14 @@ pub async fn check_user_target_access(
     }
     ResourceTarget::Alerter(id) => {
       get_check_permissions::<Alerter>(
+        id,
+        user,
+        required_permissions,
+      )
+      .await?;
+    }
+    ResourceTarget::Certificate(id) => {
+      get_check_permissions::<Certificate>(
         id,
         user,
         required_permissions,

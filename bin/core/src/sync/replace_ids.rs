@@ -6,7 +6,7 @@ use komodo_client::entities::{
   deployment::{Deployment, DeploymentImage},
   procedure::Procedure,
   repo::Repo,
-  server::Server,
+  server::{ReverseProxyTlsMode, Server},
   stack::Stack,
   swarm::Swarm,
   sync::ResourceSync,
@@ -24,7 +24,22 @@ pub trait ReplaceIds: KomodoResource {
 }
 
 // These have no linked resource ids to replace
-impl ReplaceIds for Server {}
+impl ReplaceIds for Server {
+  fn replace_ids(config: &mut Self::Config) {
+    let all = all_resources_cache().load();
+    for route in &mut config.reverse_proxy.routes {
+      if let ReverseProxyTlsMode::Terminate { certificate_id } =
+        &mut route.tls
+      {
+        if let Some(certificate) =
+          all.certificates.get(certificate_id)
+        {
+          certificate_id.clone_from(&certificate.name);
+        }
+      }
+    }
+  }
+}
 impl ReplaceIds for Action {}
 
 impl ReplaceIds for ResourceSync {
@@ -67,6 +82,13 @@ impl ReplaceIds for Swarm {
 impl ReplaceIds for Stack {
   fn replace_ids(config: &mut Self::Config) {
     let all = all_resources_cache().load();
+    for attachment in &mut config.certificate_mounts {
+      if let Some(certificate) =
+        all.certificates.get(&attachment.certificate_id)
+      {
+        attachment.certificate_id.clone_from(&certificate.name);
+      }
+    }
 
     config.swarm_id.clone_from(
       all
@@ -97,6 +119,13 @@ impl ReplaceIds for Stack {
 impl ReplaceIds for Deployment {
   fn replace_ids(config: &mut Self::Config) {
     let all = all_resources_cache().load();
+    for attachment in &mut config.certificate_mounts {
+      if let Some(certificate) =
+        all.certificates.get(&attachment.certificate_id)
+      {
+        attachment.certificate_id.clone_from(&certificate.name);
+      }
+    }
 
     config.swarm_id.clone_from(
       all
@@ -182,6 +211,21 @@ impl ReplaceIds for Builder {
   }
 }
 
+impl ReplaceIds
+  for komodo_client::entities::certificate::Certificate
+{
+  fn replace_ids(config: &mut Self::Config) {
+    let all = all_resources_cache().load();
+    config.server_id.clone_from(
+      all
+        .servers
+        .get(&config.server_id)
+        .map(|server| &server.name)
+        .unwrap_or(&String::new()),
+    );
+  }
+}
+
 impl ReplaceIds for Procedure {
   fn replace_ids(config: &mut Self::Config) {
     replace_procedure_stage_ids_with_names(&mut config.stages);
@@ -230,6 +274,7 @@ impl ReplaceIds for Alerter {
         Action => actions,
         Builder => builders,
         Alerter => alerters,
+        Certificate => certificates,
         ResourceSync => syncs,
       });
     }
@@ -245,6 +290,7 @@ impl ReplaceIds for Alerter {
         Action => actions,
         Builder => builders,
         Alerter => alerters,
+        Certificate => certificates,
         ResourceSync => syncs,
       });
     }

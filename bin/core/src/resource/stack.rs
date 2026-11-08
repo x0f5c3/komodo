@@ -6,6 +6,7 @@ use komodo_client::{
   api::write::RefreshStackCache,
   entities::{
     Operation, ResourceTarget, ResourceTargetVariant, SwarmOrServer,
+    certificate::StackCertificateAttachment,
     permission::{PermissionLevel, SpecificPermission},
     repo::Repo,
     resource::Resource,
@@ -276,7 +277,7 @@ impl super::KomodoResource for Stack {
     config: &mut Self::PartialConfig,
     user: &User,
   ) -> anyhow::Result<()> {
-    validate_config(config, user).await
+    validate_config(config, user, None).await
   }
 
   async fn post_create(
@@ -333,11 +334,12 @@ impl super::KomodoResource for Stack {
   }
 
   async fn validate_update_config(
-    _id: &str,
+    id: &str,
     config: &mut Self::PartialConfig,
     user: &User,
   ) -> anyhow::Result<()> {
-    validate_config(config, user).await
+    let existing = super::get::<Stack>(id).await?;
+    validate_config(config, user, Some(&existing)).await
   }
 
   async fn post_update(
@@ -477,6 +479,7 @@ impl super::KomodoResource for Stack {
 async fn validate_config(
   config: &mut PartialStackConfig,
   user: &User,
+  existing: Option<&Stack>,
 ) -> anyhow::Result<()> {
   if let Some(swarm_id) = &config.swarm_id
     && !swarm_id.is_empty()
@@ -515,6 +518,99 @@ async fn validate_config(
     .context("Cannot attach Repo to this Stack")?;
     // in case it comes in as name
     config.linked_repo = Some(repo.id);
+  }
+  if let Some(attachments) = &mut config.certificate_mounts {
+    let server_id = config
+      .server_id
+      .as_deref()
+      .or_else(|| {
+        existing.map(|stack| stack.config.server_id.as_str())
+      })
+      .unwrap_or_default();
+    let swarm_id = config
+      .swarm_id
+      .as_deref()
+      .or_else(|| {
+        existing.map(|stack| stack.config.swarm_id.as_str())
+      })
+      .unwrap_or_default();
+    validate_certificate_attachments(
+      attachments,
+      server_id,
+      swarm_id,
+      user,
+    )
+    .await?;
+  } else if let Some(existing) = existing
+    && (config.server_id.is_some() || config.swarm_id.is_some())
+  {
+    let server_id = config
+      .server_id
+      .as_deref()
+      .unwrap_or(&existing.config.server_id);
+    let swarm_id = config
+      .swarm_id
+      .as_deref()
+      .unwrap_or(&existing.config.swarm_id);
+    validate_certificate_attachments(
+      &mut existing.config.certificate_mounts.clone(),
+      server_id,
+      swarm_id,
+      user,
+    )
+    .await?;
+  }
+  Ok(())
+}
+
+async fn validate_certificate_attachments(
+  attachments: &mut [StackCertificateAttachment],
+  server_id: &str,
+  swarm_id: &str,
+  user: &User,
+) -> anyhow::Result<()> {
+  if attachments.is_empty() {
+    return Ok(());
+  }
+  if !swarm_id.is_empty() {
+    anyhow::bail!(
+      "Komodo-managed certificate mounts currently require a Compose Stack on a Server."
+    );
+  }
+  if server_id.is_empty() {
+    anyhow::bail!(
+      "A Stack must be assigned to a Server before attaching a Certificate."
+    );
+  }
+  let mut destinations = IndexSet::new();
+  for attachment in attachments {
+    attachment.certificate_id =
+      super::certificate::validate_attachment(
+        &attachment.certificate_id,
+        server_id,
+        user,
+      )
+      .await?;
+    attachment.mount_path = super::certificate::validate_mount_path(
+      &attachment.mount_path,
+    )?;
+    if attachment.service.trim().is_empty()
+      || !attachment.service.bytes().all(|byte| {
+        byte.is_ascii_alphanumeric() || b"._-".contains(&byte)
+      })
+    {
+      anyhow::bail!(
+        "Certificate mount service must be a valid Compose service name."
+      );
+    }
+    if !destinations.insert((
+      attachment.service.clone(),
+      attachment.mount_path.clone(),
+    )) {
+      anyhow::bail!(
+        "A Stack cannot mount multiple Certificates at the same path in a service."
+      );
+    }
   }
   Ok(())
 }

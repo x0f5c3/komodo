@@ -18,6 +18,7 @@ import { InputList } from "mogh_ui";
 import { TerminationSignal, TerminationTimeout } from "./termination";
 import { ReactNode } from "react";
 import { useFullDeployment } from "..";
+import { DeploymentCertificateAttachments } from "@/resources/certificate/attachments";
 
 export default function DeploymentConfig({
   id,
@@ -257,6 +258,29 @@ export default function DeploymentConfig({
                   onValueChange={(volumes) => set({ volumes })}
                   readOnly={disabled}
                 />
+              ),
+            },
+          },
+          {
+            label: "Certificates",
+            description:
+              "Mount ready certificates issued on this Server into the container.",
+            hidden: !!currSwarmId,
+            fields: {
+              certificate_mounts: (values, set) => (
+                <ConfigItem
+                  label="Certificate mounts"
+                  description="The directory contains current/tls.crt and current/tls.key. Hot reload requires the application to watch and reload these files."
+                >
+                  <DeploymentCertificateAttachments
+                    serverId={currServerId ?? ""}
+                    attachments={values ?? []}
+                    onChange={(certificate_mounts) =>
+                      set({ certificate_mounts })
+                    }
+                    disabled={disabled || !currServerId}
+                  />
+                </ConfigItem>
               ),
             },
           },

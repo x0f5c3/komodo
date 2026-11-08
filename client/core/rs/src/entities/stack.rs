@@ -33,6 +33,7 @@ use crate::{
 
 use super::{
   FileContents, SystemCommand,
+  certificate::StackCertificateAttachment,
   docker::container::ContainerListItem,
   resource::{Resource, ResourceListItem, ResourceQuery},
 };
@@ -358,6 +359,11 @@ pub struct StackConfig {
   ))]
   #[builder(default)]
   pub links: Vec<String>,
+
+  /// Certificates managed by Komodo and mounted read-only into Compose services.
+  #[serde(default)]
+  #[builder(default)]
+  pub certificate_mounts: Vec<StackCertificateAttachment>,
 
   /// Optionally specify a custom project name for the stack.
   /// If this is empty string, it will default to the stack name.
@@ -764,6 +770,7 @@ impl Default for StackConfig {
       webhook_force_deploy: Default::default(),
       send_alerts: default_send_alerts(),
       links: Default::default(),
+      certificate_mounts: Default::default(),
     }
   }
 }

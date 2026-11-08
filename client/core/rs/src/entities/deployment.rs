@@ -18,6 +18,7 @@ use crate::{
 
 use super::{
   TerminationSignal, Version,
+  certificate::DeploymentCertificateAttachment,
   docker::container::ContainerStateStatusEnum,
   resource::{Resource, ResourceListItem, ResourceQuery},
 };
@@ -218,6 +219,11 @@ pub struct DeploymentConfig {
   #[partial_default(default_network())]
   pub network: String,
 
+  /// Certificates managed by Komodo and mounted read-only into the container.
+  #[serde(default)]
+  #[builder(default)]
+  pub certificate_mounts: Vec<DeploymentCertificateAttachment>,
+
   /// The restart mode given to the container.
   #[serde(default)]
   #[builder(default)]
@@ -357,6 +363,7 @@ impl Default for DeploymentConfig {
       send_alerts: default_send_alerts(),
       links: Default::default(),
       network: default_network(),
+      certificate_mounts: Default::default(),
       restart: Default::default(),
       command: Default::default(),
       replicas: default_replicas(),

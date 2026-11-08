@@ -7,8 +7,9 @@ use komodo_client::entities::{
 };
 use mogh_resolver::Resolve;
 use periphery_client::api::{
-  build::*, compose::*, container::*, docker::*, git::*, keys::*,
-  poll::*, stats::*, swarm::*, terminal::*, *,
+  build::*, certificate::*, compose::*, container::*, docker::*,
+  git::*, keys::*, poll::*, reverse_proxy::*, stats::*, swarm::*,
+  terminal::*, *,
 };
 use serde::{Deserialize, Serialize};
 use strum::EnumDiscriminants;
@@ -19,12 +20,14 @@ use crate::{config::periphery_config, state::stats_client};
 pub mod terminal;
 
 mod build;
+pub(crate) mod certificate;
 mod compose;
 mod container;
 mod docker;
 mod git;
 mod keys;
 mod poll;
+mod reverse_proxy;
 mod swarm;
 
 #[derive(Debug)]
@@ -71,6 +74,12 @@ pub enum PeripheryRequest {
   CancelBuild(CancelBuild),
   PruneBuilders(PruneBuilders),
   PruneBuildx(PruneBuildx),
+
+  // Certificate
+  EnsureCertificate(EnsureCertificate),
+  RemoveCertificate(RemoveCertificate),
+  EnsureReverseProxy(EnsureReverseProxy),
+  RemoveReverseProxy(RemoveReverseProxy),
 
   // Compose (Read)
   GetComposeContentsOnHost(GetComposeContentsOnHost),
