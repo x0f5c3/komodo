@@ -24,6 +24,7 @@ use komodo_client::{
   api::{read::ExportResourcesToToml, write::CreateTag},
   entities::{
     Operation, ResourceTarget, ResourceTargetVariant,
+    certificate::{Certificate, CertificateMount},
     komodo_timestamp,
     permission::{
       PermissionLevel, PermissionLevelAndSpecifics,
@@ -57,6 +58,7 @@ use crate::{
 mod action;
 mod alerter;
 mod build;
+pub(crate) mod certificate;
 mod builder;
 mod deployment;
 mod procedure;
@@ -256,6 +258,81 @@ pub async fn get<T: KomodoResource>(
         T::resource_type()
       )
     })
+}
+
+pub async fn validate_certificate_mounts(
+  mounts: &mut [CertificateMount],
+  server_id: &str,
+  swarm_id: &str,
+  require_service: bool,
+  user: &User,
+) -> anyhow::Result<()> {
+  if mounts.is_empty() {
+    return Ok(());
+  }
+  if !swarm_id.is_empty() {
+    return Err(anyhow!(
+      "Managed certificate mounts are not supported for Swarm workloads"
+    ));
+  }
+  if server_id.is_empty() {
+    return Err(anyhow!(
+      "A Server must be selected before attaching managed certificates"
+    ));
+  }
+
+  let mut targets = HashSet::new();
+  for mount in mounts {
+    let path = std::path::Path::new(&mount.mount_path);
+    if !path.is_absolute()
+      || path == std::path::Path::new("/")
+      || path.components().any(|component| {
+        matches!(
+          component,
+          std::path::Component::ParentDir | std::path::Component::CurDir
+        )
+      })
+    {
+      return Err(anyhow!(
+        "Certificate mount paths must be non-root absolute paths without dot segments"
+      ));
+    }
+    if !targets.insert(mount.mount_path.clone()) {
+      return Err(anyhow!(
+        "Certificate mount paths must be unique within a workload"
+      ));
+    }
+    if require_service && mount.service.trim().is_empty() {
+      return Err(anyhow!(
+        "Each Stack certificate mount must specify a Compose service"
+      ));
+    }
+    if require_service
+      && !mount.service.bytes().enumerate().all(|(index, byte)| {
+        byte.is_ascii_alphanumeric()
+          || matches!(byte, b'_' | b'-' | b'.')
+            && index > 0
+      })
+    {
+      return Err(anyhow!("Invalid Compose service name for certificate mount"));
+    }
+
+    let certificate = get_check_permissions::<Certificate>(
+      &mount.certificate,
+      user,
+      PermissionLevel::Read.attach(),
+    )
+    .await
+    .context("Cannot attach this Certificate")?;
+    if certificate.config.server_id != server_id {
+      return Err(anyhow!(
+        "Certificate {} and workload must use the same Server",
+        certificate.name
+      ));
+    }
+    mount.certificate = certificate.id;
+  }
+  Ok(())
 }
 
 // ======
@@ -840,6 +917,7 @@ fn resource_target<T: KomodoResource>(id: String) -> ResourceTarget {
     }
     ResourceTargetVariant::Builder => ResourceTarget::Builder(id),
     ResourceTargetVariant::Alerter => ResourceTarget::Alerter(id),
+    ResourceTargetVariant::Certificate => ResourceTarget::Certificate(id),
   }
 }
 
@@ -1135,6 +1213,7 @@ where
     ResourceTarget::ResourceSync(id) => ("recents.ResourceSync", id),
     ResourceTarget::Builder(id) => ("recents.Builder", id),
     ResourceTarget::Alerter(id) => ("recents.Alerter", id),
+    ResourceTarget::Certificate(id) => ("recents.Certificate", id),
     ResourceTarget::System(_) => return,
   };
   if let Err(e) = db_client()

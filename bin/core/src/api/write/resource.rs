@@ -4,6 +4,7 @@ use komodo_client::{
   entities::{
     ResourceTarget, action::Action, alerter::Alerter, build::Build,
     builder::Builder, deployment::Deployment, procedure::Procedure,
+    certificate::Certificate,
     repo::Repo, server::Server, stack::Stack, swarm::Swarm,
     sync::ResourceSync,
   },
@@ -78,6 +79,9 @@ impl Resolve<WriteArgs> for UpdateResourceMeta {
       }
       ResourceTarget::Alerter(id) => {
         resource::update_meta::<Alerter>(&id, meta, args).await?;
+      }
+      ResourceTarget::Certificate(id) => {
+        resource::update_meta::<Certificate>(&id, meta, args).await?;
       }
     }
     Ok(UpdateResourceMetaResponse {})

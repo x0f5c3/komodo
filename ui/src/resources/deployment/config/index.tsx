@@ -18,6 +18,7 @@ import { InputList } from "mogh_ui";
 import { TerminationSignal, TerminationTimeout } from "./termination";
 import { ReactNode } from "react";
 import { useFullDeployment } from "..";
+import CertificateMounts from "@/components/certificate-mounts";
 
 export default function DeploymentConfig({
   id,
@@ -259,6 +260,20 @@ export default function DeploymentConfig({
                 />
               ),
             },
+            },
+            {
+              label: "Certificates",
+              hidden: !!currSwarmId,
+              fields: {
+                certificate_mounts: (mounts, set) => (
+                  <CertificateMounts
+                    serverId={currServerId ?? ""}
+                    mounts={mounts ?? []}
+                    onChange={(certificate_mounts) => set({ certificate_mounts })}
+                    disabled={disabled}
+                  />
+                ),
+              },
           },
           {
             label: "Restart",

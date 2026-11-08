@@ -3,6 +3,7 @@ use komodo_client::entities::{
   alerter::Alerter,
   build::Build,
   builder::{Builder, BuilderConfig},
+  certificate::Certificate,
   deployment::{Deployment, DeploymentImage},
   procedure::Procedure,
   repo::Repo,
@@ -37,6 +38,17 @@ impl ReplaceIds for ResourceSync {
         .map(|r| &r.name)
         .unwrap_or(&String::new()),
     );
+  }
+}
+
+impl ReplaceIds for Certificate {
+  fn replace_ids(config: &mut Self::Config) {
+    let all = all_resources_cache().load();
+    config.server_id = all
+      .servers
+      .get(&config.server_id)
+      .map(|server| server.name.clone())
+      .unwrap_or_default();
   }
 }
 
@@ -91,6 +103,13 @@ impl ReplaceIds for Stack {
         .map(|r| &r.name)
         .unwrap_or(&String::new()),
     );
+    for mount in &mut config.certificate_mounts {
+      mount.certificate = all
+        .certificates
+        .get(&mount.certificate)
+        .map(|certificate| certificate.name.clone())
+        .unwrap_or_default();
+    }
   }
 }
 
@@ -123,6 +142,13 @@ impl ReplaceIds for Deployment {
           .map(|b| &b.name)
           .unwrap_or(&String::new()),
       );
+    }
+    for mount in &mut config.certificate_mounts {
+      mount.certificate = all
+        .certificates
+        .get(&mount.certificate)
+        .map(|certificate| certificate.name.clone())
+        .unwrap_or_default();
     }
   }
 }
@@ -230,6 +256,7 @@ impl ReplaceIds for Alerter {
         Action => actions,
         Builder => builders,
         Alerter => alerters,
+        Certificate => certificates,
         ResourceSync => syncs,
       });
     }
@@ -245,6 +272,7 @@ impl ReplaceIds for Alerter {
         Action => actions,
         Builder => builders,
         Alerter => alerters,
+        Certificate => certificates,
         ResourceSync => syncs,
       });
     }

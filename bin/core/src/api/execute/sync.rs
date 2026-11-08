@@ -14,6 +14,7 @@ use komodo_client::{
     alerter::Alerter,
     build::Build,
     builder::Builder,
+    certificate::Certificate,
     deployment::Deployment,
     komodo_timestamp,
     permission::PermissionLevel,
@@ -168,6 +169,7 @@ impl Resolve<ExecuteArgs> for RunSync {
             (ResourceSync, syncs),
             (Builder, builders),
             (Alerter, alerters),
+            (Certificate, certificates),
           )
         })
         .collect::<Vec<_>>()
@@ -247,6 +249,7 @@ impl Resolve<ExecuteArgs> for RunSync {
       (action_deltas, Action, actions),
       (builder_deltas, Builder, builders),
       (alerter_deltas, Alerter, alerters),
+      (certificate_deltas, Certificate, certificates),
       (resource_sync_deltas, ResourceSync, resource_syncs),
     );
 
@@ -293,6 +296,7 @@ impl Resolve<ExecuteArgs> for RunSync {
       && build_deltas.no_changes()
       && builder_deltas.no_changes()
       && alerter_deltas.no_changes()
+      && certificate_deltas.no_changes()
       && repo_deltas.no_changes()
       && procedure_deltas.no_changes()
       && action_deltas.no_changes()
@@ -388,6 +392,10 @@ impl Resolve<ExecuteArgs> for RunSync {
     maybe_extend(
       &mut update.logs,
       ResourceSync::execute_sync_updates(resource_sync_deltas).await,
+    );
+    maybe_extend(
+      &mut update.logs,
+      Certificate::execute_sync_updates(certificate_deltas).await,
     );
     // Depends on server / build
     maybe_extend(

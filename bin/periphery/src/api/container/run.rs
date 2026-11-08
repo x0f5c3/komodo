@@ -93,6 +93,9 @@ impl Resolve<crate::api::Args> for RunContainer {
     let _ = pull_image(image).await;
     debug!("image pulled");
 
+    let command = docker_run_command(&deployment, image)
+      .context("Unable to generate valid docker run command")?;
+
     // Remove the existing container under the previously deployed name,
     // in case the name configuration changed since the last deploy.
     let _ = (RemoveContainer {
@@ -103,9 +106,6 @@ impl Resolve<crate::api::Args> for RunContainer {
     .resolve(args)
     .await;
     debug!("container stopped and removed");
-
-    let command = docker_run_command(&deployment, image)
-      .context("Unable to generate valid docker run command")?;
 
     let span = info_span!("ExecuteDockerRun");
     let Some(log) = run_komodo_command_with_sanitization(
@@ -152,11 +152,42 @@ fn docker_run_command(
     "-p",
   )?;
 
+  let user_volumes =
+    conversions_from_str(volumes).context("Invalid volumes")?;
+  for mount in &deployment.config.certificate_mounts {
+    crate::api::certificate::validate_mount_target(&mount.mount_path)?;
+    if user_volumes
+      .iter()
+      .any(|volume| volume.container == mount.mount_path)
+    {
+      anyhow::bail!(
+        "Certificate mount path {} conflicts with a configured volume",
+        mount.mount_path
+      );
+    }
+  }
   push_conversions(
     &mut res,
-    &conversions_from_str(volumes).context("Invalid volumes")?,
+    &user_volumes,
     "-v",
   )?;
+
+  for mount in &deployment.config.certificate_mounts {
+    let source =
+      crate::api::certificate::certificate_mount_dir(&mount.certificate)?;
+    if !source.join("current").is_dir() {
+      anyhow::bail!(
+        "Certificate {} has no active version on this host",
+        mount.certificate
+      );
+    }
+    let spec = format!("{}:{}:ro", source.display(), mount.mount_path);
+    write!(
+      &mut res,
+      " -v {}",
+      shell_escape::escape(spec.into())
+    )?;
+  }
 
   push_environment(
     &mut res,

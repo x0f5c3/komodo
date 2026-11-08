@@ -19,6 +19,7 @@ use crate::{config::periphery_config, state::stats_client};
 pub mod terminal;
 
 mod build;
+mod certificate;
 mod compose;
 mod container;
 mod docker;
@@ -51,6 +52,7 @@ pub enum PeripheryRequest {
   GetVersion(GetVersion),
   GetSystemProcesses(GetSystemProcesses),
   GetLatestCommit(GetLatestCommit),
+  GetHostPlatform(GetHostPlatform),
 
   // Config (Read)
   ListGitProviders(ListGitProviders),
@@ -80,6 +82,9 @@ pub enum PeripheryRequest {
   // Compose (Write)
   WriteComposeContentsToHost(WriteComposeContentsToHost),
   WriteCommitComposeContents(WriteCommitComposeContents),
+  EnsureCertificate(EnsureCertificate),
+  DeleteCertificate(DeleteCertificate),
+  ReconcileCertificateProxy(ReconcileCertificateProxy),
   ComposePull(ComposePull),
   ComposeUp(ComposeUp),
   ComposeExecution(ComposeExecution),

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use komodo_client::entities::{
   action::Action, alerter::Alerter, build::Build, builder::Builder,
+  certificate::Certificate,
   deployment::Deployment, procedure::Procedure, repo::Repo,
   server::Server, stack::Stack, swarm::Swarm, sync::ResourceSync,
 };
@@ -18,6 +19,7 @@ pub struct AllResourcesById {
   pub actions: HashMap<String, Action>,
   pub builders: HashMap<String, Builder>,
   pub alerters: HashMap<String, Alerter>,
+  pub certificates: HashMap<String, Certificate>,
   pub syncs: HashMap<String, ResourceSync>,
 }
 
@@ -62,6 +64,10 @@ impl AllResourcesById {
       )
       .await?,
       alerters: crate::resource::get_id_to_resource_map::<Alerter>(
+        id_to_tags, match_tags,
+      )
+      .await?,
+      certificates: crate::resource::get_id_to_resource_map::<Certificate>(
         id_to_tags, match_tags,
       )
       .await?,

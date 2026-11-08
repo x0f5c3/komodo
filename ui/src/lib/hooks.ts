@@ -477,6 +477,18 @@ export function useAllResources(
       },
       { refetchInterval, enabled, placeholderData: keepPreviousData },
     ).data,
+    Certificate: useRead(
+      "ListCertificates",
+      {
+        query: {
+          terms: terms?.filter(
+            (term) => !termMatchesTypeKeyword("certificates", term),
+          ),
+        },
+        limit,
+      },
+      { refetchInterval, enabled, placeholderData: keepPreviousData },
+    ).data,
   };
 }
 

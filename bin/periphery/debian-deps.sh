@@ -3,7 +3,7 @@
 ## Periphery deps installer
 
 apt-get update
-apt-get install -y git curl wget ca-certificates
+apt-get install -y git curl wget ca-certificates certbot python3-certbot-dns-cloudflare openssl
 
 install -m 0755 -d /etc/apt/keyrings
 curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
@@ -25,4 +25,3 @@ rm -rf /var/lib/apt/lists/*
 curl -sS https://starship.rs/install.sh | sh -s -- --yes --bin-dir /usr/local/bin
 echo 'export STARSHIP_CONFIG=/starship.toml' >> /root/.bashrc
 echo 'eval "$(starship init bash)"' >> /root/.bashrc
-

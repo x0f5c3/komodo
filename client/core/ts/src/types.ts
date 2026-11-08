@@ -258,7 +258,8 @@ export type ResourceTarget =
 	| { type: "Action", id: string }
 	| { type: "Builder", id: string }
 	| { type: "Alerter", id: string }
-	| { type: "ResourceSync", id: string };
+	| { type: "ResourceSync", id: string }
+	| { type: "Certificate", id: string };
 
 /** Types of maintenance schedules */
 export enum MaintenanceScheduleType {
@@ -511,6 +512,11 @@ export enum Operation {
 	UpdateAlerter = "UpdateAlerter",
 	RenameAlerter = "RenameAlerter",
 	DeleteAlerter = "DeleteAlerter",
+	CreateCertificate = "CreateCertificate",
+	UpdateCertificate = "UpdateCertificate",
+	RenameCertificate = "RenameCertificate",
+	DeleteCertificate = "DeleteCertificate",
+	RenewCertificate = "RenewCertificate",
 	TestAlerter = "TestAlerter",
 	SendAlert = "SendAlert",
 	ClearRepoCache = "ClearRepoCache",
@@ -884,6 +890,84 @@ export interface BuilderQuerySpecifics {
 }
 
 export type BuilderQuery = ResourceQuery<BuilderQuerySpecifics>;
+
+export enum CertificateProvider {
+	/**
+	 * Issue with Certbot using the DNS-01 challenge and a host-local
+	 * Cloudflare API token.
+	 */
+	CloudflareDns01 = "CloudflareDns01",
+	/** Retrieve a certificate using the host's authenticated Tailscale CLI. */
+	Tailscale = "Tailscale",
+}
+
+export enum CertificateTlsMode {
+	/** Terminate TLS in the managed Pingora proxy. */
+	Terminate = "Terminate",
+	/** Forward the TLS stream based on exact SNI without terminating it. */
+	SniPassthrough = "SniPassthrough",
+}
+
+export interface CertificateProxyRoute {
+	/** Exact public hostname; wildcard routes are deliberately unsupported. */
+	domain: string;
+	/** HTTP(S) upstream URL or host:port. */
+	upstream: string;
+	tls_mode?: CertificateTlsMode;
+	/** Redirect HTTP requests to HTTPS for this domain. */
+	redirect_http_to_https?: boolean;
+}
+
+export interface CertificateConfig {
+	/** The Unix Server whose Periphery agent owns the certificate files. */
+	server_id?: string;
+	/**
+	 * Exact DNS names included in the certificate. Wildcards are accepted
+	 * for certificates, but are never accepted as proxy route names.
+	 */
+	domains?: string[];
+	provider?: CertificateProvider;
+	/** Required by ACME for account registration and expiry notifications. */
+	email?: string;
+	/**
+	 * Name of the Cloudflare token in Periphery's local `secrets` map.
+	 * The token value is never sent to or stored in Core.
+	 */
+	cloudflare_token_secret?: string;
+	/** Optional name passed to the Tailscale CLI; defaults to the first domain. */
+	tailscale_cert_name?: string;
+	/** Routes associated with this certificate. Route domains must be exact. */
+	proxy_routes?: CertificateProxyRoute[];
+}
+
+export interface CertificateInfo {
+	/** Unix timestamp of the last successful issue or renewal. */
+	last_issued?: I64;
+	/** Certificate expiry timestamp reported by the host. */
+	expires_at?: I64;
+	/** A non-secret status summary. */
+	status?: string;
+}
+
+export type Certificate = Resource<CertificateConfig, CertificateInfo>;
+
+export interface CertificateListItemInfo {
+	server_id: string;
+	server_name: string;
+	provider: CertificateProvider;
+	domains: string[];
+	last_issued: I64;
+	expires_at: I64;
+	status: string;
+}
+
+export type CertificateListItem = ResourceListItem<CertificateListItemInfo>;
+
+export interface CertificateQuerySpecifics {
+	server_ids?: string[];
+}
+
+export type CertificateQuery = ResourceQuery<CertificateQuerySpecifics>;
 
 /** A wrapper for all Komodo exections. */
 export type Execution = 
@@ -1327,6 +1411,15 @@ export enum TerminationSignal {
 	SigTerm = "SIGTERM",
 }
 
+export interface CertificateMount {
+	/** Certificate resource id or name. */
+	certificate: string;
+	/** Absolute path visible inside the workload. */
+	mount_path: string;
+	/** Required for Stack services; ignored for Deployments. */
+	service?: string;
+}
+
 export interface DeploymentConfig {
 	/**
 	 * The Swarm to deploy the Deployment on (as a Swarm Service), setting the Deployment into Swarm mode.
@@ -1428,6 +1521,11 @@ export interface DeploymentConfig {
 	 * Maps files / folders on host to files / folders in container.
 	 */
 	volumes?: string;
+	/**
+	 * Certificates managed on the attached Server and mounted read-only.
+	 * Unavailable in Swarm mode.
+	 */
+	certificate_mounts?: CertificateMount[];
 	/** The environment variables passed to the container / service. */
 	environment?: string;
 	/** The docker labels given to the container. */
@@ -1907,6 +2005,8 @@ export type GetBuildActionStateResponse = BuildActionState;
 export type GetBuildResponse = Build;
 
 export type GetBuilderResponse = Builder;
+
+export type GetCertificateResponse = Certificate;
 
 export type GetContainerLogResponse = Log;
 
@@ -2500,6 +2600,11 @@ export interface StackConfig {
 	 * swarm_id overrides server_id and the Stack will be in Swarm mode.
 	 */
 	server_id?: string;
+	/**
+	 * Certificates mounted read-only into non-Swarm Compose services.
+	 * Each entry names a service and a mount path inside that service.
+	 */
+	certificate_mounts?: CertificateMount[];
 	/** Configure quick links that are displayed in the resource header */
 	links?: string[];
 	/**
@@ -5144,6 +5249,8 @@ export type ListBuildersResponse = BuilderListItem[];
 
 export type ListBuildsResponse = BuildListItem[];
 
+export type ListCertificatesResponse = CertificateListItem[];
+
 export type ListCommonBuildExtraArgsResponse = string[];
 
 export type ListCommonDeploymentExtraArgsResponse = string[];
@@ -5174,6 +5281,8 @@ export type ListFullAlertersResponse = Alerter[];
 export type ListFullBuildersResponse = Builder[];
 
 export type ListFullBuildsResponse = Build[];
+
+export type ListFullCertificatesResponse = Certificate[];
 
 export type ListFullDeploymentsResponse = Deployment[];
 
@@ -6044,6 +6153,8 @@ export type _PartialAwsBuilderConfig = Partial<AwsBuilderConfig>;
 export type _PartialBuildConfig = Partial<BuildConfig>;
 
 export type _PartialBuilderConfig = Partial<BuilderConfig>;
+
+export type _PartialCertificateConfig = Partial<CertificateConfig>;
 
 export type _PartialDeploymentConfig = Partial<DeploymentConfig>;
 
@@ -6975,6 +7086,11 @@ export interface CopyBuilder {
 	id: string;
 }
 
+export interface CopyCertificate {
+	name: string;
+	id: string;
+}
+
 /**
  * Creates a new deployment with given `name` and the configuration
  * of the deployment at the given `id`. Response: [Deployment]
@@ -7106,6 +7222,11 @@ export interface CreateBuilder {
 	name: string;
 	/** Optional partial config to initialize the builder with. */
 	config?: PartialBuilderConfig;
+}
+
+export interface CreateCertificate {
+	name: string;
+	config?: _PartialCertificateConfig;
 }
 
 /** Create a deployment. Response: [Deployment]. */
@@ -7435,6 +7556,10 @@ export interface DeleteBuild {
  */
 export interface DeleteBuilder {
 	/** The id or name of the builder to delete. */
+	id: string;
+}
+
+export interface DeleteCertificate {
 	id: string;
 }
 
@@ -7825,6 +7950,8 @@ export interface ResourcesToml {
 	stacks?: ResourceToml<_PartialStackConfig>[];
 	/** Declare a deployment */
 	deployments?: ResourceToml<_PartialDeploymentConfig>[];
+	/** Declare a managed certificate. */
+	certificates?: ResourceToml<_PartialCertificateConfig>[];
 	/** Declare a build */
 	builds?: ResourceToml<_PartialBuildConfig>[];
 	/** Declare a repo */
@@ -8078,6 +8205,11 @@ export interface GetBuildsSummaryResponse {
 	building: number;
 	/** The number of builds with unknown state. */
 	unknown: number;
+}
+
+/** Get a managed certificate. */
+export interface GetCertificate {
+	certificate: string;
 }
 
 /**
@@ -9251,6 +9383,12 @@ export interface ListBuilds {
 	sort_desc?: boolean;
 }
 
+export interface ListCertificates {
+	query?: CertificateQuery;
+	page?: U64;
+	limit?: U64;
+}
+
 /**
  * Gets a list of existing values used as extra args across other builds.
  * Useful to offer suggestions. Response: [ListCommonBuildExtraArgsResponse]
@@ -9435,6 +9573,12 @@ export interface ListFullBuilds {
 	 * Note: the page logic relies on this being consistent
 	 * across queries for more pages.
 	 */
+	limit?: U64;
+}
+
+export interface ListFullCertificates {
+	query?: CertificateQuery;
+	page?: U64;
 	limit?: U64;
 }
 
@@ -10595,6 +10739,11 @@ export interface RenameBuilder {
 	name: string;
 }
 
+export interface RenameCertificate {
+	id: string;
+	name: string;
+}
+
 /**
  * Rename the deployment at id to the given name. Response: [Update].
  * 
@@ -10685,6 +10834,15 @@ export interface RenameUserGroup {
 	id: string;
 	/** The new name for the UserGroup */
 	name: string;
+}
+
+/**
+ * Check or force renewal of a managed certificate.
+ * Private key material never leaves the Periphery host.
+ */
+export interface RenewCertificate {
+	certificate: string;
+	force?: boolean;
 }
 
 export enum DefaultRepoFolder {
@@ -11406,6 +11564,11 @@ export interface UpdateBuilder {
 	config: PartialBuilderConfig;
 }
 
+export interface UpdateCertificate {
+	id: string;
+	config: _PartialCertificateConfig;
+}
+
 /**
  * Update the deployment at the given id, and return the updated deployment.
  * Response: [Deployment].
@@ -11835,6 +11998,7 @@ export type ExecuteRequest =
 	| { type: "StopDeployment", params: StopDeployment }
 	| { type: "DestroyDeployment", params: DestroyDeployment }
 	| { type: "BatchDestroyDeployment", params: BatchDestroyDeployment }
+	| { type: "RenewCertificate", params: RenewCertificate }
 	| { type: "RunBuild", params: RunBuild }
 	| { type: "BatchRunBuild", params: BatchRunBuild }
 	| { type: "CancelBuild", params: CancelBuild }
@@ -12044,6 +12208,9 @@ export type ReadRequest =
 	| { type: "ListAllStackServices", params: ListAllStackServices }
 	| { type: "ListCommonStackExtraArgs", params: ListCommonStackExtraArgs }
 	| { type: "ListCommonStackBuildExtraArgs", params: ListCommonStackBuildExtraArgs }
+	| { type: "GetCertificate", params: GetCertificate }
+	| { type: "ListCertificates", params: ListCertificates }
+	| { type: "ListFullCertificates", params: ListFullCertificates }
 	| { type: "GetDeploymentsSummary", params: GetDeploymentsSummary }
 	| { type: "GetDeployment", params: GetDeployment }
 	| { type: "GetDeploymentContainer", params: GetDeploymentContainer }
@@ -12251,6 +12418,11 @@ export type WriteRequest =
 	| { type: "DeleteAlerter", params: DeleteAlerter }
 	| { type: "UpdateAlerter", params: UpdateAlerter }
 	| { type: "RenameAlerter", params: RenameAlerter }
+	| { type: "CreateCertificate", params: CreateCertificate }
+	| { type: "CopyCertificate", params: CopyCertificate }
+	| { type: "DeleteCertificate", params: DeleteCertificate }
+	| { type: "UpdateCertificate", params: UpdateCertificate }
+	| { type: "RenameCertificate", params: RenameCertificate }
 	| { type: "CreateOnboardingKey", params: CreateOnboardingKey }
 	| { type: "UpdateOnboardingKey", params: UpdateOnboardingKey }
 	| { type: "DeleteOnboardingKey", params: DeleteOnboardingKey }

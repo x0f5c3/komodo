@@ -42,6 +42,7 @@ mod action;
 mod alert;
 mod alerter;
 mod build;
+mod certificate;
 mod builder;
 mod deployment;
 mod docker;
@@ -173,6 +174,11 @@ enum ReadRequest {
   ListAllStackServices(ListAllStackServices),
   ListCommonStackExtraArgs(ListCommonStackExtraArgs),
   ListCommonStackBuildExtraArgs(ListCommonStackBuildExtraArgs),
+
+  // ==== CERTIFICATE ====
+  GetCertificate(GetCertificate),
+  ListCertificates(ListCertificates),
+  ListFullCertificates(ListFullCertificates),
 
   // ==== DEPLOYMENT ====
   GetDeploymentsSummary(GetDeploymentsSummary),

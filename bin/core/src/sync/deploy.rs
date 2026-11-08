@@ -355,6 +355,7 @@ fn build_cache_for_deployment<'a>(
           || diff.extra_args.is_some()
           || diff.ports.is_some()
           || diff.volumes.is_some()
+          || diff.certificate_mounts.is_some()
           || diff.environment.is_some()
           || diff.labels.is_some();
         if changed {
@@ -591,7 +592,8 @@ fn build_cache_for_stack<'a>(
           || diff.repo.is_some()
           || diff.branch.is_some()
           || diff.commit.is_some()
-          || diff.compose_cmd_wrapper.is_some();
+          || diff.compose_cmd_wrapper.is_some()
+          || diff.certificate_mounts.is_some();
         if changed {
           cache.insert(
             target,

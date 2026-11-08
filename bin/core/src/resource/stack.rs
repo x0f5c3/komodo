@@ -276,7 +276,7 @@ impl super::KomodoResource for Stack {
     config: &mut Self::PartialConfig,
     user: &User,
   ) -> anyhow::Result<()> {
-    validate_config(config, user).await
+    validate_config(config, user, None).await
   }
 
   async fn post_create(
@@ -333,11 +333,11 @@ impl super::KomodoResource for Stack {
   }
 
   async fn validate_update_config(
-    _id: &str,
+    id: &str,
     config: &mut Self::PartialConfig,
     user: &User,
   ) -> anyhow::Result<()> {
-    validate_config(config, user).await
+    validate_config(config, user, Some(id)).await
   }
 
   async fn post_update(
@@ -477,6 +477,7 @@ impl super::KomodoResource for Stack {
 async fn validate_config(
   config: &mut PartialStackConfig,
   user: &User,
+  resource_id: Option<&str>,
 ) -> anyhow::Result<()> {
   if let Some(swarm_id) = &config.swarm_id
     && !swarm_id.is_empty()
@@ -502,6 +503,30 @@ async fn validate_config(
     .context("Cannot attach Stack to this Server")?;
     // in case it comes in as name
     config.server_id = Some(server.id);
+  }
+  if let Some(mounts) = &mut config.certificate_mounts {
+    let existing = match resource_id {
+      Some(id) => Some(super::get::<Stack>(id).await?),
+      None => None,
+    };
+    let server_id = config
+      .server_id
+      .clone()
+      .or_else(|| existing.as_ref().map(|stack| stack.config.server_id.clone()))
+      .unwrap_or_default();
+    let swarm_id = config
+      .swarm_id
+      .clone()
+      .or_else(|| existing.as_ref().map(|stack| stack.config.swarm_id.clone()))
+      .unwrap_or_default();
+    super::validate_certificate_mounts(
+      mounts,
+      &server_id,
+      &swarm_id,
+      true,
+      user,
+    )
+    .await?;
   }
   if let Some(linked_repo) = &config.linked_repo
     && !linked_repo.is_empty()

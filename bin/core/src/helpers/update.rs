@@ -9,6 +9,7 @@ use komodo_client::entities::{
   Operation, ResourceTarget,
   action::Action,
   alerter::Alerter,
+  certificate::Certificate,
   build::Build,
   deployment::Deployment,
   komodo_timestamp,
@@ -174,6 +175,7 @@ pub async fn init_execution_update(
 
   let (operation, target) = init_execution_match!(
     resource: [
+      (RenewCertificate, Certificate, certificate),
       // Swarm
       (RemoveSwarmNodes, Swarm, swarm),
       (UpdateSwarmNode, Swarm, swarm),

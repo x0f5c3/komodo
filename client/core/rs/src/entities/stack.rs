@@ -33,6 +33,7 @@ use crate::{
 
 use super::{
   FileContents, SystemCommand,
+  certificate::CertificateMount,
   docker::container::ContainerListItem,
   resource::{Resource, ResourceListItem, ResourceQuery},
 };
@@ -349,6 +350,12 @@ pub struct StackConfig {
   )]
   #[builder(default)]
   pub server_id: String,
+
+  /// Certificates mounted read-only into non-Swarm Compose services.
+  /// Each entry names a service and a mount path inside that service.
+  #[serde(default)]
+  #[builder(default)]
+  pub certificate_mounts: Vec<CertificateMount>,
 
   /// Configure quick links that are displayed in the resource header
   #[serde(default, deserialize_with = "string_list_deserializer")]
@@ -724,6 +731,7 @@ impl Default for StackConfig {
     Self {
       swarm_id: Default::default(),
       server_id: Default::default(),
+      certificate_mounts: Default::default(),
       project_name: Default::default(),
       run_directory: Default::default(),
       file_paths: Default::default(),

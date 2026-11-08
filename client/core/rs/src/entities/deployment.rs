@@ -18,6 +18,7 @@ use crate::{
 
 use super::{
   TerminationSignal, Version,
+  certificate::CertificateMount,
   docker::container::ContainerStateStatusEnum,
   resource::{Resource, ResourceListItem, ResourceQuery},
 };
@@ -296,6 +297,12 @@ pub struct DeploymentConfig {
   #[builder(default)]
   pub volumes: String,
 
+  /// Certificates managed on the attached Server and mounted read-only.
+  /// Unavailable in Swarm mode.
+  #[serde(default)]
+  #[builder(default)]
+  pub certificate_mounts: Vec<CertificateMount>,
+
   /// The environment variables passed to the container / service.
   #[serde(default, deserialize_with = "env_vars_deserializer")]
   #[partial_attr(serde(
@@ -366,6 +373,7 @@ impl Default for DeploymentConfig {
       term_signal_labels: Default::default(),
       ports: Default::default(),
       volumes: Default::default(),
+      certificate_mounts: Default::default(),
       environment: Default::default(),
       labels: Default::default(),
     }

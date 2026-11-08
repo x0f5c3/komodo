@@ -210,7 +210,7 @@ impl super::KomodoResource for Deployment {
     config: &mut Self::PartialConfig,
     user: &User,
   ) -> anyhow::Result<()> {
-    validate_config(config, user).await
+    validate_config(config, user, None).await
   }
 
   async fn post_create(
@@ -258,7 +258,7 @@ impl super::KomodoResource for Deployment {
     config: &mut Self::PartialConfig,
     user: &User,
   ) -> anyhow::Result<()> {
-    validate_config(config, user).await?;
+    validate_config(config, user, Some(id)).await?;
     handle_custom_name_update(id, config).await
   }
 
@@ -396,6 +396,7 @@ impl super::KomodoResource for Deployment {
 async fn validate_config(
   config: &mut PartialDeploymentConfig,
   user: &User,
+  resource_id: Option<&str>,
 ) -> anyhow::Result<()> {
   if let Some(swarm_id) = &config.swarm_id
     && !swarm_id.is_empty()
@@ -420,6 +421,30 @@ async fn validate_config(
     .await
     .context("Cannot attach Deployment to this Server")?;
     config.server_id = Some(server.id);
+  }
+  if let Some(mounts) = &mut config.certificate_mounts {
+    let existing = match resource_id {
+      Some(id) => Some(super::get::<Deployment>(id).await?),
+      None => None,
+    };
+    let server_id = config
+      .server_id
+      .clone()
+      .or_else(|| existing.as_ref().map(|deployment| deployment.config.server_id.clone()))
+      .unwrap_or_default();
+    let swarm_id = config
+      .swarm_id
+      .clone()
+      .or_else(|| existing.as_ref().map(|deployment| deployment.config.swarm_id.clone()))
+      .unwrap_or_default();
+    super::validate_certificate_mounts(
+      mounts,
+      &server_id,
+      &swarm_id,
+      false,
+      user,
+    )
+    .await?;
   }
   if let Some(DeploymentImage::Build { build_id, version }) =
     &config.image

@@ -147,6 +147,11 @@ export type ReadResponses = {
   ListAlerters: Types.ListAlertersResponse;
   ListFullAlerters: Types.ListFullAlertersResponse;
 
+  // ==== CERTIFICATE ====
+  GetCertificate: Types.GetCertificateResponse;
+  ListCertificates: Types.ListCertificatesResponse;
+  ListFullCertificates: Types.ListFullCertificatesResponse;
+
   // ==== TOML ====
   ExportAllResourcesToToml: Types.ExportAllResourcesToTomlResponse;
   ExportResourcesToToml: Types.ExportResourcesToTomlResponse;
@@ -294,6 +299,13 @@ export type WriteResponses = {
   UpdateAlerter: Types.Alerter;
   RenameAlerter: Types.Update;
 
+  // ==== CERTIFICATE ====
+  CreateCertificate: Types.Certificate;
+  CopyCertificate: Types.Certificate;
+  DeleteCertificate: Types.Certificate;
+  UpdateCertificate: Types.Certificate;
+  RenameCertificate: Types.Update;
+
   // ==== ONBOARDING KEY ====
   CreateOnboardingKey: Types.CreateOnboardingKeyResponse;
   UpdateOnboardingKey: Types.UpdateOnboardingKeyResponse;
@@ -406,6 +418,9 @@ export type ExecuteResponses = {
 
   // ==== SYNC ====
   RunSync: Types.Update;
+
+  // ==== CERTIFICATE ====
+  RenewCertificate: Types.Update;
 
   // ==== ALERTER ====
   TestAlerter: Types.Update;

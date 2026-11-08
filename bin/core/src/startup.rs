@@ -123,6 +123,7 @@ pub async fn on_startup() {
     ensure_first_server_and_builder(),
     ensure_init_user_and_resources(),
   );
+  crate::resource::certificate::spawn_certificate_renewal_loop();
 }
 
 async fn in_progress_update_cleanup() {

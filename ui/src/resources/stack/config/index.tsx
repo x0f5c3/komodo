@@ -44,6 +44,7 @@ import { DEFAULT_STACK_FILE_CONTENTS, useFullStack } from "..";
 import { ReactNode } from "react";
 import WebhookBuilder from "@/components/webhook/builder";
 import CopyWebhookUrl from "@/components/webhook/copy-url";
+import CertificateMounts from "@/components/certificate-mounts";
 
 type StackMode = "UI Defined" | "Files On Server" | "Git Repo" | undefined;
 const STACK_MODES = ["UI Defined", "Files On Server", "Git Repo"] as const;
@@ -384,6 +385,22 @@ export default function StackConfig({
   const auto_update = update.auto_update ?? config.auto_update ?? false;
 
   const generalCommon: ConfigGroupArgs<Types.StackConfig>[] = [
+    {
+      label: "Certificates",
+      hidden: !!currSwarmId,
+      fields: {
+        certificate_mounts: (mounts, set) => (
+          <CertificateMounts
+            serverId={currServerId ?? ""}
+            mounts={mounts ?? []}
+            services={allServices}
+            requireService
+            onChange={(certificate_mounts) => set({ certificate_mounts })}
+            disabled={disabled}
+          />
+        ),
+      },
+    },
     {
       label: "Auto Update",
       labelHidden: true,

@@ -256,6 +256,7 @@ pub fn extend_resources(
     swarms,
     stacks,
     deployments,
+    certificates,
     builds,
     repos,
     procedures,

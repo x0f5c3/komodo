@@ -32,53 +32,60 @@
         "$ref": "#/definitions/ResourceToml4"
       }
     },
+    "certificate": {
+      "description": "Declare a managed certificate.",
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/ResourceToml5"
+      }
+    },
     "build": {
       "description": "Declare a build",
       "type": "array",
       "items": {
-        "$ref": "#/definitions/ResourceToml5"
+        "$ref": "#/definitions/ResourceToml6"
       }
     },
     "repo": {
       "description": "Declare a repo",
       "type": "array",
       "items": {
-        "$ref": "#/definitions/ResourceToml6"
+        "$ref": "#/definitions/ResourceToml7"
       }
     },
     "procedure": {
       "description": "Declare a procedure",
       "type": "array",
       "items": {
-        "$ref": "#/definitions/ResourceToml7"
+        "$ref": "#/definitions/ResourceToml8"
       }
     },
     "action": {
       "description": "Declare an action",
       "type": "array",
       "items": {
-        "$ref": "#/definitions/ResourceToml8"
+        "$ref": "#/definitions/ResourceToml9"
       }
     },
     "alerter": {
       "description": "Declare an alerter",
       "type": "array",
       "items": {
-        "$ref": "#/definitions/ResourceToml9"
+        "$ref": "#/definitions/ResourceToml10"
       }
     },
     "builder": {
       "description": "Declare a builder",
       "type": "array",
       "items": {
-        "$ref": "#/definitions/ResourceToml10"
+        "$ref": "#/definitions/ResourceToml11"
       }
     },
     "resource_sync": {
       "description": "Declare a resource sync",
       "type": "array",
       "items": {
-        "$ref": "#/definitions/ResourceToml11"
+        "$ref": "#/definitions/ResourceToml12"
       }
     },
     "user_group": {
@@ -565,6 +572,16 @@
             "null"
           ]
         },
+        "certificate_mounts": {
+          "description": "Certificates mounted read-only into non-Swarm Compose services.\nEach entry names a service and a mount path inside that service.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/CertificateMount"
+          }
+        },
         "links": {
           "description": "Configure quick links that are displayed in the resource header",
           "type": [
@@ -882,6 +899,28 @@
         }
       }
     },
+    "CertificateMount": {
+      "type": "object",
+      "properties": {
+        "certificate": {
+          "description": "Certificate resource id or name.",
+          "type": "string"
+        },
+        "mount_path": {
+          "description": "Absolute path visible inside the workload.",
+          "type": "string"
+        },
+        "service": {
+          "description": "Required for Stack services; ignored for Deployments.",
+          "type": "string",
+          "default": ""
+        }
+      },
+      "required": [
+        "certificate",
+        "mount_path"
+      ]
+    },
     "AdditionalEnvFile": {
       "description": "Additional env file configuration for Stack.\nSupports backward compatibility with string-only format.",
       "type": "object",
@@ -1022,6 +1061,13 @@
         },
         "server": {
           "description": "The Server to deploy the Deployment on, setting the Deployment into Container mode.\n\nNote. If both swarm_id and server_id are set,\nswarm_id overrides server_id and the Deployment will be in Swarm mode.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "custom_name": {
+          "description": "Specify a custom container / service name,\nif different from Deployment name.",
           "type": [
             "string",
             "null"
@@ -1173,6 +1219,16 @@
             "null"
           ]
         },
+        "certificate_mounts": {
+          "description": "Certificates managed on the attached Server and mounted read-only.\nUnavailable in Swarm mode.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/CertificateMount"
+          }
+        },
         "environment": {
           "description": "The environment variables passed to the container / service.",
           "type": [
@@ -1295,6 +1351,173 @@
       ]
     },
     "ResourceToml5": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "The resource name. Required",
+          "type": "string"
+        },
+        "description": {
+          "description": "The resource description. Optional.",
+          "type": "string"
+        },
+        "template": {
+          "description": "Mark resource as a template",
+          "type": "boolean"
+        },
+        "tags": {
+          "description": "Tag ids or names. Optional",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "deploy": {
+          "description": "Optional. Only relevant for deployments / stacks.\n\nWill ensure deployment / stack is running with the latest configuration.\nDeploy actions to achieve this will be included in the sync.\nDefault is false.",
+          "type": "boolean"
+        },
+        "after": {
+          "description": "Optional. Only relevant for deployments / stacks using the 'deploy' sync feature.\n\nSpecify other deployments / stacks by name as dependencies.\nThe sync will ensure the deployment / stack will only be deployed 'after' its dependencies.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "config": {
+          "description": "Resource specific configuration.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PartialCertificateConfig"
+            }
+          ]
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "PartialCertificateConfig": {
+      "type": "object",
+      "properties": {
+        "server_id": {
+          "description": "The Unix Server whose Periphery agent owns the certificate files.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "domains": {
+          "description": "Exact DNS names included in the certificate. Wildcards are accepted\nfor certificates, but are never accepted as proxy route names.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "provider": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CertificateProvider"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "email": {
+          "description": "Required by ACME for account registration and expiry notifications.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cloudflare_token_secret": {
+          "description": "Name of the Cloudflare token in Periphery's local `secrets` map.\nThe token value is never sent to or stored in Core.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tailscale_cert_name": {
+          "description": "Optional name passed to the Tailscale CLI; defaults to the first domain.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "proxy_routes": {
+          "description": "Routes associated with this certificate. Route domains must be exact.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/CertificateProxyRoute"
+          }
+        }
+      }
+    },
+    "CertificateProvider": {
+      "oneOf": [
+        {
+          "description": "Issue with Certbot using the DNS-01 challenge and a host-local\nCloudflare API token.",
+          "type": "string",
+          "const": "CloudflareDns01"
+        },
+        {
+          "description": "Retrieve a certificate using the host's authenticated Tailscale CLI.",
+          "type": "string",
+          "const": "Tailscale"
+        }
+      ]
+    },
+    "CertificateProxyRoute": {
+      "type": "object",
+      "properties": {
+        "domain": {
+          "description": "Exact public hostname; wildcard routes are deliberately unsupported.",
+          "type": "string"
+        },
+        "upstream": {
+          "description": "HTTP(S) upstream URL or host:port.",
+          "type": "string"
+        },
+        "tls_mode": {
+          "default": "Terminate",
+          "allOf": [
+            {
+              "$ref": "#/definitions/CertificateTlsMode"
+            }
+          ]
+        },
+        "redirect_http_to_https": {
+          "description": "Redirect HTTP requests to HTTPS for this domain.",
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": [
+        "domain",
+        "upstream"
+      ]
+    },
+    "CertificateTlsMode": {
+      "oneOf": [
+        {
+          "description": "Terminate TLS in the managed Pingora proxy.",
+          "type": "string",
+          "const": "Terminate"
+        },
+        {
+          "description": "Forward the TLS stream based on exact SNI without terminating it.",
+          "type": "string",
+          "const": "SniPassthrough"
+        }
+      ]
+    },
+    "ResourceToml6": {
       "type": "object",
       "properties": {
         "name": {
@@ -1596,7 +1819,7 @@
         }
       }
     },
-    "ResourceToml6": {
+    "ResourceToml7": {
       "type": "object",
       "properties": {
         "name": {
@@ -1777,7 +2000,7 @@
         }
       }
     },
-    "ResourceToml7": {
+    "ResourceToml8": {
       "type": "object",
       "properties": {
         "name": {
@@ -3312,6 +3535,14 @@
         "pattern": {
           "description": "Id or name or wildcard pattern or regex.\nSupports multiline and comma delineated combinations of the above.\n\nExample:\n```text\n# match all foo-* stacks\nfoo-*\n# add some more\nextra-stack-1, extra-stack-2\n```",
           "type": "string"
+        },
+        "tags": {
+          "description": "Filter matches by tag.\nIf empty, skips tag filtering.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
         }
       },
       "required": [
@@ -3346,6 +3577,14 @@
         "pattern": {
           "description": "Id or name or wildcard pattern or regex.\nSupports multiline and comma delineated combinations of the above.\n\nExample:\n```text\n# match all foo-* stacks\nfoo-*\n# add some more\nextra-stack-1, extra-stack-2\n```",
           "type": "string"
+        },
+        "tags": {
+          "description": "Filter matches by tag.\nIf empty, skips tag filtering.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
         }
       },
       "required": [
@@ -3380,6 +3619,14 @@
         "pattern": {
           "description": "Id or name or wildcard pattern or regex.\nSupports multiline and comma delineated combinations of the above.\n\nExample:\n```text\n# match all foo-* stacks\nfoo-*\n# add some more\nextra-stack-1, extra-stack-2\n```",
           "type": "string"
+        },
+        "tags": {
+          "description": "Filter matches by tag.\nIf empty, skips tag filtering.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
         }
       },
       "required": [
@@ -3540,6 +3787,14 @@
         "pattern": {
           "description": "Id or name or wildcard pattern or regex.\nSupports multiline and comma delineated combinations of the above.\n\nExample:\n```text\n# match all foo-* stacks\nfoo-*\n# add some more\nextra-stack-1, extra-stack-2\n```",
           "type": "string"
+        },
+        "tags": {
+          "description": "Filter matches by tag.\nIf empty, skips tag filtering.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
         }
       },
       "required": [
@@ -3679,6 +3934,14 @@
         "pattern": {
           "description": "Id or name or wildcard pattern or regex.\nSupports multiline and comma delineated combinations of the above.\n\nExample:\n```text\n# match all foo-* deployments\nfoo-*\n# add some more\nextra-deployment-1, extra-deployment-2\n```",
           "type": "string"
+        },
+        "tags": {
+          "description": "Filter matches by tag.\nIf empty, skips tag filtering.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
         }
       },
       "required": [
@@ -3821,6 +4084,14 @@
         "pattern": {
           "description": "Id or name or wildcard pattern or regex.\nSupports multiline and comma delineated combinations of the above.\n\nExample:\n```text\n# match all foo-* deployments\nfoo-*\n# add some more\nextra-deployment-1, extra-deployment-2\n```",
           "type": "string"
+        },
+        "tags": {
+          "description": "Filter matches by tag.\nIf empty, skips tag filtering.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
         }
       },
       "required": [
@@ -3847,6 +4118,14 @@
         "pattern": {
           "description": "Id or name or wildcard pattern or regex.\nSupports multiline and comma delineated combinations of the above.\n\nExample:\n```text\n# match all foo-* builds\nfoo-*\n# add some more\nextra-build-1, extra-build-2\n```",
           "type": "string"
+        },
+        "tags": {
+          "description": "Filter matches by tag.\nIf empty, skips tag filtering.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
         }
       },
       "required": [
@@ -3886,6 +4165,14 @@
         "pattern": {
           "description": "Id or name or wildcard pattern or regex.\nSupports multiline and comma delineated combinations of the above.\n\nExample:\n```text\n# match all foo-* repos\nfoo-*\n# add some more\nextra-repo-1, extra-repo-2\n```",
           "type": "string"
+        },
+        "tags": {
+          "description": "Filter matches by tag.\nIf empty, skips tag filtering.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
         }
       },
       "required": [
@@ -3912,6 +4199,14 @@
         "pattern": {
           "description": "Id or name or wildcard pattern or regex.\nSupports multiline and comma delineated combinations of the above.\n\nExample:\n```text\n# match all foo-* repos\nfoo-*\n# add some more\nextra-repo-1, extra-repo-2\n```",
           "type": "string"
+        },
+        "tags": {
+          "description": "Filter matches by tag.\nIf empty, skips tag filtering.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
         }
       },
       "required": [
@@ -3938,6 +4233,14 @@
         "pattern": {
           "description": "Id or name or wildcard pattern or regex.\nSupports multiline and comma delineated combinations of the above.\n\nExample:\n```text\n# match all foo-* repos\nfoo-*\n# add some more\nextra-repo-1, extra-repo-2\n```",
           "type": "string"
+        },
+        "tags": {
+          "description": "Filter matches by tag.\nIf empty, skips tag filtering.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
         }
       },
       "required": [
@@ -3977,6 +4280,14 @@
         "pattern": {
           "description": "Id or name or wildcard pattern or regex.\nSupports multiline and comma delineated combinations of the above.\n\nExample:\n```text\n# match all foo-* procedures\nfoo-*\n# add some more\nextra-procedure-1, extra-procedure-2\n```",
           "type": "string"
+        },
+        "tags": {
+          "description": "Filter matches by tag.\nIf empty, skips tag filtering.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
         }
       },
       "required": [
@@ -4031,6 +4342,14 @@
         "pattern": {
           "description": "Id or name or wildcard pattern or regex.\nSupports multiline and comma delineated combinations of the above.\n\nExample:\n```text\n# match all foo-* actions\nfoo-*\n# add some more\nextra-action-1, extra-action-2\n```",
           "type": "string"
+        },
+        "tags": {
+          "description": "Filter matches by tag.\nIf empty, skips tag filtering.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
         }
       },
       "required": [
@@ -4106,7 +4425,8 @@
         "Action",
         "Builder",
         "Alerter",
-        "ResourceSync"
+        "ResourceSync",
+        "Certificate"
       ]
     },
     "CommitSync": {
@@ -4919,7 +5239,7 @@
         "Cron"
       ]
     },
-    "ResourceToml8": {
+    "ResourceToml9": {
       "type": "object",
       "properties": {
         "name": {
@@ -5078,7 +5398,7 @@
         "json"
       ]
     },
-    "ResourceToml9": {
+    "ResourceToml10": {
       "type": "object",
       "properties": {
         "name": {
@@ -5647,10 +5967,26 @@
             "type",
             "id"
           ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "Certificate"
+            },
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id"
+          ]
         }
       ]
     },
-    "ResourceToml10": {
+    "ResourceToml11": {
       "type": "object",
       "properties": {
         "name": {
@@ -6004,7 +6340,7 @@
         "accounts"
       ]
     },
-    "ResourceToml11": {
+    "ResourceToml12": {
       "type": "object",
       "properties": {
         "name": {
@@ -6228,6 +6564,9 @@
               "$ref": "#/definitions/PermissionLevelAndSpecifics"
             },
             "Builder": {
+              "$ref": "#/definitions/PermissionLevelAndSpecifics"
+            },
+            "Certificate": {
               "$ref": "#/definitions/PermissionLevelAndSpecifics"
             },
             "Deployment": {

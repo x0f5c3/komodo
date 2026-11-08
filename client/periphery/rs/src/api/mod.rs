@@ -8,6 +8,7 @@ use mogh_resolver::Resolve;
 use serde::{Deserialize, Serialize};
 
 pub mod build;
+pub mod certificate;
 pub mod compose;
 pub mod container;
 pub mod docker;
@@ -17,6 +18,8 @@ pub mod poll;
 pub mod stats;
 pub mod swarm;
 pub mod terminal;
+
+pub use certificate::*;
 
 //
 

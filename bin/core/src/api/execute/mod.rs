@@ -41,6 +41,7 @@ use crate::{
 mod action;
 mod alerter;
 mod build;
+mod certificate;
 mod deployment;
 mod maintenance;
 mod procedure;
@@ -97,6 +98,9 @@ pub enum ExecuteRequest {
   StopDeployment(StopDeployment),
   DestroyDeployment(DestroyDeployment),
   BatchDestroyDeployment(BatchDestroyDeployment),
+
+  // ==== BUILD ====
+  RenewCertificate(RenewCertificate),
 
   // ==== BUILD ====
   RunBuild(RunBuild),

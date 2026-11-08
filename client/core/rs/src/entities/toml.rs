@@ -10,6 +10,7 @@ use super::{
   alerter::_PartialAlerterConfig,
   build::_PartialBuildConfig,
   builder::_PartialBuilderConfig,
+  certificate::_PartialCertificateConfig,
   deployment::_PartialDeploymentConfig,
   permission::{
     PermissionLevel, PermissionLevelAndSpecifics, SpecificPermission,
@@ -64,6 +65,15 @@ pub struct ResourcesToml {
   )]
   #[cfg_attr(feature = "schemars", schemars(rename = "deployment"))]
   pub deployments: Vec<ResourceToml<_PartialDeploymentConfig>>,
+
+  /// Declare a managed certificate.
+  #[serde(
+    default,
+    alias = "certificate",
+    skip_serializing_if = "Vec::is_empty"
+  )]
+  #[cfg_attr(feature = "schemars", schemars(rename = "certificate"))]
+  pub certificates: Vec<ResourceToml<_PartialCertificateConfig>>,
 
   /// Declare a build
   #[serde(

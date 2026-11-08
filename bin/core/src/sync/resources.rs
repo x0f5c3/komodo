@@ -4,6 +4,7 @@ use formatting::{Color, bold, colored, muted};
 use komodo_client::entities::{
   ResourceTargetVariant, action::Action, alerter::Alerter,
   build::Build, builder::Builder, deployment::Deployment,
+  certificate::Certificate,
   procedure::Procedure, repo::Repo, server::Server, stack::Stack,
   swarm::Swarm, sync::ResourceSync, tag::Tag, update::Log,
   user::sync_user,
@@ -52,6 +53,9 @@ impl ExecuteResourceSync for Repo {}
 
 impl ResourceSyncTrait for Alerter {}
 impl ExecuteResourceSync for Alerter {}
+
+impl ResourceSyncTrait for Certificate {}
+impl ExecuteResourceSync for Certificate {}
 
 impl ResourceSyncTrait for Builder {}
 impl ExecuteResourceSync for Builder {}

@@ -15,7 +15,7 @@ use interpolate::Interpolator;
 use komodo_client::{
   entities::{
     FileContents, RepoExecutionResponse, all_logs_success,
-    stack::{AdditionalEnvFile, StackRemoteFileContents},
+    stack::{AdditionalEnvFile, Stack, StackRemoteFileContents},
     to_path_compatible_name,
     update::Log,
   },
@@ -490,6 +490,86 @@ impl Resolve<crate::api::Args> for ComposeUp {
       return Ok(res);
     }
 
+    async fn write_certificate_mounts_override(
+      stack: &Stack,
+    ) -> anyhow::Result<Option<PathBuf>> {
+      let override_dir = periphery_config()
+        .root_directory
+        .join("certificate-overrides");
+      let path = override_dir.join(format!("{}.yaml", stack.id));
+      if stack.config.certificate_mounts.is_empty() {
+        match std::fs::remove_file(&path) {
+          Ok(()) => {}
+          Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+          Err(error) => return Err(error.into()),
+        }
+        return Ok(None);
+      }
+      if stack.id.len() != 24
+        || !stack.id.bytes().all(|byte| byte.is_ascii_hexdigit())
+      {
+        return Err(anyhow!("Invalid Stack id for certificate overlay"));
+      }
+
+      std::fs::create_dir_all(&override_dir)
+        .context("Failed to prepare Compose certificate overlay directory")?;
+      let mut services = serde_json::Map::new();
+      for mount in &stack.config.certificate_mounts {
+        crate::api::certificate::validate_mount_target(&mount.mount_path)?;
+        if mount.service.is_empty()
+          || !mount
+            .service
+            .bytes()
+            .enumerate()
+            .all(|(index, byte)| {
+              byte.is_ascii_alphanumeric()
+                || (matches!(byte, b'_' | b'-' | b'.') && index > 0)
+            })
+        {
+          return Err(anyhow!("Invalid Compose service name for certificate mount"));
+        }
+        let source =
+          crate::api::certificate::certificate_mount_dir(&mount.certificate)?;
+        if !source.join("current").is_dir() {
+          return Err(anyhow!(
+            "Certificate {} has no active version on this host",
+            mount.certificate
+          ));
+        }
+        if source.to_string_lossy().contains(',') {
+          return Err(anyhow!(
+            "Periphery certificate path cannot contain commas for Docker mounts"
+          ));
+        }
+        let service = services
+          .entry(mount.service.clone())
+          .or_insert_with(|| serde_json::json!({ "volumes": [] }));
+        let volumes = service
+          .get_mut("volumes")
+          .and_then(serde_json::Value::as_array_mut)
+          .context("Invalid internal certificate override")?;
+        volumes.push(serde_json::json!({
+          "type": "bind",
+          "source": source,
+          "target": mount.mount_path,
+          "read_only": true,
+        }));
+      }
+      let contents = serde_yaml_ng::to_string(&serde_json::json!({
+        "services": services,
+      }))
+      .context("Failed to serialize Compose certificate override")?;
+      let next = path.with_extension("yaml.next");
+      std::fs::write(&next, contents)
+        .context("Failed to write Compose certificate override")?;
+      std::fs::rename(&next, &path)
+        .context("Failed to atomically install Compose certificate override")?;
+      Ok(Some(path))
+    }
+
+    let certificate_override =
+      write_certificate_mounts_override(&stack).await?;
+
     maybe_login_registry(&stack, registry_token, &mut res.logs).await;
     if !all_logs_success(&res.logs) {
       return Ok(res);
@@ -530,7 +610,10 @@ impl Resolve<crate::api::Args> for ComposeUp {
       format!(" -- {}", services.join(" "))
     };
 
-    let file_args = stack.compose_file_paths().join(" -f ");
+    let mut file_args = stack.compose_file_paths().join(" -f ");
+    if let Some(path) = certificate_override {
+      write!(&mut file_args, " -f {}", escape(path.display().to_string().into()))?;
+    }
 
     // This will be the last project name, which is the one that needs to be destroyed.
     // Might be different from the current project name, if user renames stack / changes to custom project name.
