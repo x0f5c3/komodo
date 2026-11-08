@@ -1,7 +1,6 @@
 FROM rust:1.98.0-trixie AS builder
-RUN apt-get update && apt-get install -y --no-install-recommends cmake pkg-config libssl-dev \
+RUN apt-get update && apt-get install -y --no-install-recommends cmake pkg-config \
   && rm -rf /var/lib/apt/lists/*
-ENV OPENSSL_NO_VENDOR=1
 WORKDIR /builder
 COPY Cargo.toml Cargo.lock ./
 COPY lib lib
@@ -12,7 +11,7 @@ COPY xtask xtask
 RUN cargo build --locked --release -p komodo_proxy
 
 FROM debian:trixie-slim
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libssl3t64 \
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /builder/target/release/proxy /usr/local/bin/proxy
 EXPOSE 8080 8443

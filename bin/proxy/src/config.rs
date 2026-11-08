@@ -5,23 +5,25 @@ use std::{
   sync::Arc,
 };
 
-use anyhow::{Context, bail};
+use anyhow::Context;
+#[cfg(feature = "openssl")]
+use anyhow::bail;
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use komodo_proxy_config::{ProxyConfig, ProxyRoute};
 use pingora_core::{
-  server::ShutdownWatch,
-  services::background::BackgroundService,
-  tls::{
-    pkey::PKey,
-    ssl::{AlpnError, SslAcceptor, SslMethod, select_next_proto},
-    x509::X509,
-  },
+  server::ShutdownWatch, services::background::BackgroundService,
 };
+
+#[cfg(feature = "rustls")]
+type TlsAcceptor = pingora_core::listeners::tls::Acceptor;
+
+#[cfg(feature = "openssl")]
+type TlsAcceptor = pingora_core::tls::ssl::SslAcceptor;
 
 pub struct RuntimeRoute {
   pub upstream: url::Url,
-  pub acceptor: Option<SslAcceptor>,
+  pub acceptor: Option<TlsAcceptor>,
 }
 
 pub struct Snapshot {
@@ -113,25 +115,57 @@ fn parse_upstream(route: &ProxyRoute) -> anyhow::Result<url::Url> {
 fn build_acceptor(
   cert: &[u8],
   key: &[u8],
-) -> anyhow::Result<SslAcceptor> {
-  let mut chain = X509::stack_from_pem(cert)?.into_iter();
-  let Some(leaf) = chain.next() else {
-    bail!("Certificate chain is empty");
-  };
-  let mut builder =
-    SslAcceptor::mozilla_intermediate_v5(SslMethod::tls())?;
-  builder.set_certificate(&leaf)?;
-  let key = PKey::private_key_from_pem(key)?;
-  builder.set_private_key(&key)?;
-  for cert in chain {
-    builder.add_extra_chain_cert(cert)?;
+) -> anyhow::Result<TlsAcceptor> {
+  #[cfg(feature = "rustls")]
+  {
+    use std::io::Cursor;
+
+    let certificates = rustls_pemfile::certs(&mut Cursor::new(cert))
+      .collect::<Result<Vec<_>, _>>()?;
+    let key = rustls_pemfile::private_key(&mut Cursor::new(key))?
+      .context("Private key is missing")?;
+    pingora_core::tls::install_default_crypto_provider();
+    let mut config =
+      pingora_core::tls::ServerConfig::builder_with_protocol_versions(
+        &[
+        &pingora_core::tls::version::TLS13,
+        &pingora_core::tls::version::TLS12,
+        ],
+      )?
+      .with_no_client_auth()
+      .with_single_cert(certificates, key)?;
+    config.alpn_protocols =
+      vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+    Ok(TlsAcceptor::from_server_config(Arc::new(config)))
   }
-  builder.check_private_key()?;
-  builder.set_alpn_select_callback(|_, offered| {
-    select_next_proto(b"\x02h2\x08http/1.1", offered)
-      .ok_or(AlpnError::NOACK)
-  });
-  Ok(builder.build())
+
+  #[cfg(feature = "openssl")]
+  {
+    use pingora_core::tls::{
+      pkey::PKey,
+      ssl::{AlpnError, SslAcceptor, SslMethod, select_next_proto},
+      x509::X509,
+    };
+
+    let mut chain = X509::stack_from_pem(cert)?.into_iter();
+    let Some(leaf) = chain.next() else {
+      bail!("Certificate chain is empty");
+    };
+    let mut builder =
+      SslAcceptor::mozilla_intermediate_v5(SslMethod::tls())?;
+    builder.set_certificate(&leaf)?;
+    let key = PKey::private_key_from_pem(key)?;
+    builder.set_private_key(&key)?;
+    for cert in chain {
+      builder.add_extra_chain_cert(cert)?;
+    }
+    builder.check_private_key()?;
+    builder.set_alpn_select_callback(|_, offered| {
+      select_next_proto(b"\x02h2\x08http/1.1", offered)
+        .ok_or(AlpnError::NOACK)
+    });
+    Ok(builder.build())
+  }
 }
 
 pub struct Reload {

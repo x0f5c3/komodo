@@ -10,8 +10,8 @@ path = "src/main.rs"
 
 [dependencies]
 komodo_proxy_config = { path = "../../lib/proxy-config" }
-pingora-core = { version = "0.9.1", default-features = false, features = ["openssl"] }
-pingora-proxy = { version = "0.9.1", default-features = false, features = ["openssl"] }
+pingora-core = { version = "0.9.1", default-features = false }
+pingora-proxy = { version = "0.9.1", default-features = false }
 pingora-http = "0.9.1"
 async-trait = "0.1.89"
 env_logger = "0.11.8"
@@ -20,8 +20,15 @@ anyhow.workspace = true
 arc-swap.workspace = true
 serde_json.workspace = true
 rustls.workspace = true
+rustls-pemfile = "2.2.0"
 tokio.workspace = true
 url.workspace = true
+openssl = { version = "0.10.79", optional = true }
+
+[features]
+default = ["rustls"]
+rustls = ["pingora-core/rustls", "pingora-proxy/rustls"]
+openssl = ["dep:openssl", "pingora-core/openssl", "pingora-proxy/openssl"]
 
 [dev-dependencies]
 axum.workspace = true

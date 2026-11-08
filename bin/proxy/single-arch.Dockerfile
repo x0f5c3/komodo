@@ -1,7 +1,7 @@
 ARG BINARIES_IMAGE=ghcr.io/moghtech/komodo-binaries:2
 FROM ${BINARIES_IMAGE} AS binaries
 FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libssl3 \
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 COPY --from=binaries /proxy /usr/local/bin/proxy
 EXPOSE 8080 8443

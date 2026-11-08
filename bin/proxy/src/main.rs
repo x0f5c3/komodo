@@ -1,5 +1,13 @@
 #![cfg_attr(test, allow(unused_crate_dependencies))]
 
+#[cfg(any(
+  all(feature = "rustls", feature = "openssl"),
+  not(any(feature = "rustls", feature = "openssl"))
+))]
+compile_error!(
+  "Enable exactly one proxy TLS backend: rustls or openssl"
+);
+
 use std::{
   path::PathBuf,
   sync::{Arc, Mutex},

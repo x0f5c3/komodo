@@ -31,7 +31,6 @@ impl Resolve<Args> for EnsureReverseProxy {
     {
       let _guard = PROXY_RECONCILIATION.lock().await;
       validate_server_id(&self.server_id)?;
-      let _guard = PROXY_RECONCILIATION.lock().await;
       validate_config(&self.config)?;
       if !self.config.enabled {
         return remove_proxy(&self.server_id).await;
@@ -444,10 +443,7 @@ async fn docker_container_exists(
     .context("Failed to inspect managed reverse proxy container")?;
   if output.status.success() {
     Ok(true)
-  } else if String::from_utf8_lossy(&output.stderr)
-    .to_ascii_lowercase()
-    .contains("no such object")
-  {
+  } else if is_missing_container_error(&output.stderr) {
     Ok(false)
   } else {
     Err(anyhow!(
@@ -455,6 +451,12 @@ async fn docker_container_exists(
       String::from_utf8_lossy(&output.stderr).trim()
     ))
   }
+}
+
+fn is_missing_container_error(stderr: &[u8]) -> bool {
+  let stderr = String::from_utf8_lossy(stderr).to_ascii_lowercase();
+  stderr.contains("no such object:")
+    || stderr.contains("no such container:")
 }
 
 async fn remove_proxy(
@@ -570,6 +572,19 @@ mod tests {
     assert!(validate_config(&duplicate_domains).is_err());
     assert!(validate_http_upstream("ftp://upstream:3000").is_err());
     assert!(validate_tcp_upstream("upstream").is_err());
+  }
+
+  #[test]
+  fn recognizes_docker_missing_container_errors() {
+    assert!(is_missing_container_error(
+      b"Error: No such container: komodo-proxy-example"
+    ));
+    assert!(is_missing_container_error(
+      b"Error response from daemon: No such object: komodo-proxy-example"
+    ));
+    assert!(!is_missing_container_error(
+      b"Error response from daemon: connection refused"
+    ));
   }
 
   #[cfg(unix)]
