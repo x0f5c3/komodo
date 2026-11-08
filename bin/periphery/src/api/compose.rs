@@ -797,7 +797,7 @@ impl Resolve<crate::api::Args> for ComposeUp {
           return Ok(res);
         }
       };
-      let config_log = if wrapped {
+      let mut config_log = if wrapped {
         run_komodo_shell_command(
           "Compose Config With Certificates",
           command,
@@ -812,6 +812,7 @@ impl Resolve<crate::api::Args> for ComposeUp {
         )
         .await
       };
+      config_log.sanitize(&replacers);
       if !config_log.success {
         res.logs.push(config_log);
         return Ok(res);

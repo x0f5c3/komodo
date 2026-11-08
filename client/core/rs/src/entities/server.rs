@@ -96,6 +96,9 @@ pub struct ServerInfo {
   /// private key of the periphery agent.
   #[serde(default)]
   pub public_key: String,
+  /// Tracks managed proxy cleanup until a disabled proxy has been removed.
+  #[serde(default)]
+  pub reverse_proxy_managed: bool,
 }
 
 #[typeshare(serialized_as = "Partial<ServerConfig>")]

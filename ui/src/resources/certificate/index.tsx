@@ -281,6 +281,11 @@ function CertificateConfig({ id }: { id: string }) {
       key: `certificate-${id}-update-v1`,
       defaultValue: {},
     });
+  const [domainsDraft, setDomainsDraft, clearDomainsDraft] =
+    useLocalStorage<string | null>({
+      key: `certificate-${id}-domains-draft-v1`,
+      defaultValue: null,
+    });
 
   if (!certificate) return null;
 
@@ -295,7 +300,17 @@ function CertificateConfig({ id }: { id: string }) {
 
   const onSave = async () => {
     try {
-      await mutateAsync({ id, config: update });
+      await mutateAsync({
+        id,
+        config: {
+          ...update,
+          ...(domainsDraft !== null && {
+            domains: domainsDraft.split(",").map((domain) => domain.trim()).filter(Boolean),
+          }),
+        },
+      });
+      setUpdate({});
+      clearDomainsDraft();
       notifications.show({
         message: "Certificate settings saved",
         color: "green",
@@ -329,15 +344,9 @@ function CertificateConfig({ id }: { id: string }) {
       <TextInput
         label="DNS names"
         description="Enter comma-separated fully qualified DNS names."
-        value={(update.domains ?? config?.domains ?? []).join(", ")}
+        value={domainsDraft ?? (update.domains ?? config?.domains ?? []).join(", ")}
         onChange={(event) =>
-          setUpdate({
-            ...update,
-            domains: event.currentTarget.value
-              .split(",")
-              .map((domain) => domain.trim())
-              .filter(Boolean),
-          })
+          setDomainsDraft(event.currentTarget.value)
         }
         disabled={disabled}
       />

@@ -352,6 +352,11 @@ impl Resolve<ExecuteArgs> for RunSync {
       &mut update.logs,
       Server::execute_sync_updates(server_deltas).await,
     );
+    // Certificates must exist before validating workload attachments.
+    maybe_extend(
+      &mut update.logs,
+      Certificate::execute_sync_updates(certificate_deltas).await,
+    );
     maybe_extend(
       &mut update.logs,
       Alerter::execute_sync_updates(alerter_deltas).await,
@@ -391,10 +396,6 @@ impl Resolve<ExecuteArgs> for RunSync {
     maybe_extend(
       &mut update.logs,
       ResourceSync::execute_sync_updates(resource_sync_deltas).await,
-    );
-    maybe_extend(
-      &mut update.logs,
-      Certificate::execute_sync_updates(certificate_deltas).await,
     );
     // Depends on server / build
     maybe_extend(

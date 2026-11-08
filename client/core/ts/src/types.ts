@@ -920,6 +920,8 @@ export interface CertificateInfo {
 	status?: CertificateStatus;
 	expires_at?: I64;
 	last_error?: string;
+	/** Workloads awaiting acknowledgement of the current certificate rotation. */
+	pending_restarts?: string[];
 }
 
 export type Certificate = Resource<CertificateConfig, CertificateInfo>;
@@ -2523,6 +2525,8 @@ export interface ServerInfo {
 	 * private key of the periphery agent.
 	 */
 	public_key?: string;
+	/** Tracks managed proxy cleanup until a disabled proxy has been removed. */
+	reverse_proxy_managed?: boolean;
 }
 
 export type Server = Resource<ServerConfig, ServerInfo>;

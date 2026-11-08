@@ -167,6 +167,7 @@ impl super::KomodoResource for Certificate {
         status: CertificateStatus::Pending,
         expires_at: None,
         last_error: None,
+        pending_restarts: updated.info.pending_restarts.clone(),
       },
     )
     .await?;
@@ -249,6 +250,7 @@ pub fn spawn_certificate_refresh_loop() {
     loop {
       interval.tick().await;
       refresh_certificates().await;
+      super::server::reconcile_reverse_proxies().await;
     }
   });
 }
@@ -264,47 +266,133 @@ async fn refresh_certificates() {
     };
 
   for certificate in certificates {
-    let result = refresh_certificate(&certificate).await;
-    let (info, changed) = match result {
-      Ok((expires_at, changed)) => (
-        CertificateInfo {
-          status: CertificateStatus::Ready,
-          expires_at: Some(expires_at),
-          last_error: None,
-        },
-        changed,
-      ),
+    let _guard = super::CERTIFICATE_LIFECYCLE.lock().await;
+    // The list may predate an update/delete that waited on the lifecycle gate.
+    let current = match db_client()
+      .certificates
+      .find_one(crate::helpers::query::id_or_name_filter(
+        &certificate.id,
+      ))
+      .await
+    {
+      Ok(Some(current)) => current,
+      Ok(None) => continue,
       Err(error) => {
-        warn!(
-          "Certificate refresh failed | {} | {error:#}",
+        error!(
+          "Failed to reload Certificate | {} | {error:#}",
           certificate.name
         );
-        (
-          CertificateInfo {
-            status: CertificateStatus::Error,
-            expires_at: certificate.info.expires_at,
-            last_error: Some(format!("{error:#}")),
-          },
-          false,
-        )
+        continue;
       }
     };
-    if let Err(error) =
-      update_certificate_info(&certificate.id, info).await
-    {
+    if let Err(error) = refresh_and_restart(current).await {
       error!(
-        "Failed to update Certificate state | {} | {error:#}",
+        "Certificate reconciliation failed | {} | {error:#}",
         certificate.name
       );
     }
-    if changed
-      && let Err(error) =
-        restart_attached_workloads(&certificate).await
-    {
-      error!(
-        "Certificate was renewed but attached workloads could not all be restarted | {} | {error:#}",
-        certificate.name
-      );
+  }
+}
+
+async fn refresh_and_restart(
+  mut certificate: Certificate,
+) -> anyhow::Result<()> {
+  let targets = attached_restart_targets(&certificate.id).await?;
+  let renewal_due = certificate.info.status
+    != CertificateStatus::Ready
+    || certificate.info.expires_at.is_none_or(|expires| {
+      expires <= chrono::Utc::now().timestamp() + 30 * 24 * 60 * 60
+    });
+  if renewal_due {
+    enqueue_restarts(
+      &mut certificate.info.pending_restarts,
+      &targets,
+    );
+    // Persist intent before issuance so a Core restart cannot lose recovery.
+    update_certificate_info(
+      &certificate.id,
+      certificate.info.clone(),
+    )
+    .await?;
+  }
+  let mut errors = Vec::new();
+  let changed = match refresh_certificate(&certificate).await {
+    Ok((expires_at, changed)) => {
+      certificate.info.status = CertificateStatus::Ready;
+      certificate.info.expires_at = Some(expires_at);
+      certificate.info.last_error = None;
+      changed
+    }
+    Err(error) => {
+      certificate.info.status = CertificateStatus::Error;
+      certificate.info.last_error = Some(format!("{error:#}"));
+      update_certificate_info(
+        &certificate.id,
+        certificate.info.clone(),
+      )
+      .await?;
+      if certificate.info.expires_at.is_none() {
+        return Err(error);
+      }
+      // Recovery of an already-published rotation must not depend on issuance.
+      errors.push(format!("Certificate issuance: {error:#}"));
+      false
+    }
+  };
+  if changed {
+    enqueue_restarts(
+      &mut certificate.info.pending_restarts,
+      &targets,
+    );
+  }
+  certificate
+    .info
+    .pending_restarts
+    .retain(|key| targets.iter().any(|target| target.key() == *key));
+  update_certificate_info(&certificate.id, certificate.info.clone())
+    .await?;
+  for target in targets {
+    let key = target.key();
+    if !certificate.info.pending_restarts.contains(&key) {
+      continue;
+    }
+    match target.restart().await {
+      Ok(()) => {
+        certificate
+          .info
+          .pending_restarts
+          .retain(|pending| pending != &key);
+        update_certificate_info(
+          &certificate.id,
+          certificate.info.clone(),
+        )
+        .await?;
+      }
+      Err(error) => {
+        error!(
+          "Certificate workload restart failed | {key} | {error:#}"
+        );
+        errors.push(format!("{key}: {error:#}"));
+      }
+    }
+  }
+  if !errors.is_empty() {
+    anyhow::bail!(
+      "Pending certificate restarts: {}",
+      errors.join("; ")
+    );
+  }
+  Ok(())
+}
+
+fn enqueue_restarts(
+  pending: &mut Vec<String>,
+  targets: &[RestartTarget],
+) {
+  for target in targets {
+    let key = target.key();
+    if !pending.contains(&key) {
+      pending.push(key);
     }
   }
 }
@@ -345,41 +433,67 @@ async fn refresh_certificate(
   Ok((response.expires_at, response.changed))
 }
 
-async fn restart_attached_workloads(
-  certificate: &Resource<CertificateConfig, CertificateInfo>,
-) -> anyhow::Result<()> {
-  let server = super::get::<Server>(&certificate.config.server_id)
-    .await
-    .context("Certificate Server no longer exists")?;
-  if server.config.reverse_proxy.enabled
-    && server
-      .config
-      .reverse_proxy
-      .routes
-      .iter()
-      .any(|route| {
-        matches!(
-          &route.tls,
-          komodo_client::entities::server::ReverseProxyTlsMode::Terminate {
-            certificate_id
-          } if certificate_id == &certificate.id
-        )
-      })
-  {
-    periphery_client(&server)
-      .await?
-      .request(periphery_api::reverse_proxy::EnsureReverseProxy {
-        server_id: server.id.clone(),
-        config: server.config.reverse_proxy.clone(),
-      })
-      .await
-      .context("Failed to reload reverse proxy certificate")?;
+enum RestartTarget {
+  Deployment(komodo_client::entities::deployment::Deployment),
+  Stack(komodo_client::entities::stack::Stack, String),
+}
+
+impl RestartTarget {
+  fn key(&self) -> String {
+    match self {
+      Self::Deployment(deployment) => {
+        format!("deployment:{}", deployment.id)
+      }
+      Self::Stack(stack, service) => {
+        format!("stack:{}:{service}", stack.id)
+      }
+    }
   }
 
+  async fn restart(&self) -> anyhow::Result<()> {
+    let result = match self {
+      Self::Deployment(deployment) => {
+        let server =
+          super::get::<Server>(&deployment.config.server_id).await?;
+        periphery_client(&server)
+          .await?
+          .request(periphery_api::container::RestartContainer {
+            name: deployment.deployed_name().to_string(),
+          })
+          .await?
+      }
+      Self::Stack(stack, service) => {
+        let server =
+          super::get::<Server>(&stack.config.server_id).await?;
+        let project = shlex::try_quote(&stack.project_name(false))
+          .context("Invalid Stack project name")?
+          .into_owned();
+        let service = shlex::try_quote(service)
+          .context("Invalid Stack service name")?;
+        periphery_client(&server)
+          .await?
+          .request(periphery_api::compose::ComposeExecution {
+            project,
+            command: format!("restart -- {service}"),
+          })
+          .await?
+      }
+    };
+    if !result.success {
+      anyhow::bail!("Workload restart failed: {}", result.stderr);
+    }
+    Ok(())
+  }
+}
+
+async fn attached_restart_targets(
+  certificate_id: &str,
+) -> anyhow::Result<Vec<RestartTarget>> {
+  let mut targets = Vec::new();
   let deployments = find_collect(
     &db_client().deployments,
     doc! {
-      "config.certificate_mounts.certificate_id": &certificate.id
+      "config.certificate_mounts.certificate_id": certificate_id
     },
     None,
   )
@@ -388,37 +502,19 @@ async fn restart_attached_workloads(
   for deployment in deployments {
     if !deployment.config.certificate_mounts.iter().any(
       |attachment| {
-        attachment.certificate_id == certificate.id
+        attachment.certificate_id == certificate_id
           && attachment.refresh == CertificateRefreshBehavior::Restart
       },
     ) {
       continue;
     }
-    let server = super::get::<Server>(&deployment.config.server_id)
-      .await
-      .context("Attached Deployment Server no longer exists")?;
-    let result = periphery_client(&server)
-      .await?
-      .request(periphery_api::container::RestartContainer {
-        name: deployment.deployed_name().to_string(),
-      })
-      .await
-      .with_context(|| {
-        format!("Failed to restart Deployment '{}'", deployment.name)
-      })?;
-    if !result.success {
-      anyhow::bail!(
-        "Failed to restart Deployment '{}': {}",
-        deployment.name,
-        result.stderr
-      );
-    }
+    targets.push(RestartTarget::Deployment(deployment));
   }
 
   let stacks = find_collect(
     &db_client().stacks,
     doc! {
-      "config.certificate_mounts.certificate_id": &certificate.id
+      "config.certificate_mounts.certificate_id": certificate_id
     },
     None,
   )
@@ -430,45 +526,18 @@ async fn restart_attached_workloads(
       .certificate_mounts
       .iter()
       .filter(|attachment| {
-        attachment.certificate_id == certificate.id
+        attachment.certificate_id == certificate_id
           && attachment.refresh == CertificateRefreshBehavior::Restart
       })
       .map(|attachment| attachment.service.clone())
       .collect::<IndexSet<_>>()
       .into_iter()
       .collect::<Vec<_>>();
-    if services.is_empty() {
-      continue;
-    }
-    let server = super::get::<Server>(&stack.config.server_id)
-      .await
-      .context("Attached Stack Server no longer exists")?;
-    let project = shlex::try_quote(&stack.project_name(false))
-      .context("Invalid Stack project name")?
-      .into_owned();
-    let services =
-      shlex::try_join(services.iter().map(String::as_str))
-        .context("Invalid Stack service name")?;
-    let command = format!("restart -- {services}");
-    let result = periphery_client(&server)
-      .await?
-      .request(periphery_api::compose::ComposeExecution {
-        project,
-        command,
-      })
-      .await
-      .with_context(|| {
-        format!("Failed to restart attached Stack '{}'", stack.name)
-      })?;
-    if !result.success {
-      anyhow::bail!(
-        "Failed to restart Stack '{}': {}",
-        stack.name,
-        result.stderr
-      );
+    for service in services {
+      targets.push(RestartTarget::Stack(stack.clone(), service));
     }
   }
-  Ok(())
+  Ok(targets)
 }
 
 async fn update_certificate_info(
@@ -646,7 +715,46 @@ pub(crate) fn certificate_covers_domain(
 
 #[cfg(test)]
 mod tests {
-  use super::{certificate_covers_domain, valid_domain};
+  use super::{
+    RestartTarget, certificate_covers_domain, enqueue_restarts,
+    valid_domain,
+  };
+
+  #[test]
+  fn pending_restarts_are_deduplicated_and_survive_state_serialization()
+   {
+    let deployment =
+      komodo_client::entities::deployment::Deployment {
+        id: "deployment".into(),
+        ..Default::default()
+      };
+    let stack = komodo_client::entities::stack::Stack {
+      id: "stack".into(),
+      ..Default::default()
+    };
+    let targets = [
+      RestartTarget::Deployment(deployment),
+      RestartTarget::Stack(stack.clone(), "one".into()),
+      RestartTarget::Stack(stack, "two".into()),
+    ];
+    let mut pending = Vec::new();
+    enqueue_restarts(&mut pending, &targets);
+    pending.retain(|key| key != "stack:stack:one");
+    let info = super::CertificateInfo {
+      pending_restarts: pending,
+      ..Default::default()
+    };
+    let mut restored: super::CertificateInfo =
+      serde_json::from_value(serde_json::to_value(info).unwrap())
+        .unwrap();
+    assert_eq!(
+      restored.pending_restarts,
+      ["deployment:deployment", "stack:stack:two"]
+    );
+    enqueue_restarts(&mut restored.pending_restarts, &targets);
+    enqueue_restarts(&mut restored.pending_restarts, &targets);
+    assert_eq!(restored.pending_restarts.len(), 3);
+  }
 
   #[test]
   fn accepts_dns_names_and_wildcards() {

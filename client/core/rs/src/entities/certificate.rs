@@ -119,6 +119,9 @@ pub struct CertificateInfo {
   pub expires_at: Option<I64>,
   #[serde(default)]
   pub last_error: Option<String>,
+  /// Workloads awaiting acknowledgement of the current certificate rotation.
+  #[serde(default)]
+  pub pending_restarts: Vec<String>,
 }
 
 #[typeshare]

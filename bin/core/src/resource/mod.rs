@@ -68,6 +68,24 @@ mod stack;
 mod swarm;
 mod sync;
 
+// Certificate issuance and Server/Certificate mutations share one gate so
+// no configuration or deletion can overtake an in-flight host operation.
+pub(crate) static CERTIFICATE_LIFECYCLE: tokio::sync::Mutex<()> =
+  tokio::sync::Mutex::const_new(());
+
+async fn certificate_lifecycle_guard<T: KomodoResource>()
+-> Option<tokio::sync::MutexGuard<'static, ()>> {
+  if matches!(
+    T::resource_type(),
+    ResourceTargetVariant::Certificate
+      | ResourceTargetVariant::Server
+  ) {
+    Some(CERTIFICATE_LIFECYCLE.lock().await)
+  } else {
+    None
+  }
+}
+
 pub use action::{
   refresh_action_state_cache, spawn_action_state_refresh_loop,
 };
@@ -616,6 +634,7 @@ pub async fn create<T: KomodoResource>(
   info: Option<T::Info>,
   user: &User,
 ) -> mogh_error::Result<Resource<T::Config, T::Info>> {
+  let _guard = certificate_lifecycle_guard::<T>().await;
   if !T::user_can_create(user) {
     return Err(
       anyhow!(
@@ -736,6 +755,7 @@ pub async fn update<T: KomodoResource>(
   mut config: T::PartialConfig,
   user: &User,
 ) -> anyhow::Result<Resource<T::Config, T::Info>> {
+  let _guard = certificate_lifecycle_guard::<T>().await;
   let resource = get_check_permissions::<T>(
     id_or_name,
     user,
@@ -1000,6 +1020,7 @@ pub async fn delete<T: KomodoResource>(
   id_or_name: &str,
   user: &User,
 ) -> anyhow::Result<Resource<T::Config, T::Info>> {
+  let _guard = certificate_lifecycle_guard::<T>().await;
   let resource = get_check_permissions::<T>(
     id_or_name,
     user,

@@ -172,14 +172,7 @@ impl super::KomodoResource for Server {
   ) -> anyhow::Result<()> {
     refresh_server_cache(created, true).await;
     if created.config.reverse_proxy.enabled {
-      periphery_client(created)
-        .await?
-        .request(EnsureReverseProxy {
-          server_id: created.id.clone(),
-          config: created.config.reverse_proxy.clone(),
-        })
-        .await
-        .context("Failed to start managed reverse proxy")?;
+      reconcile_reverse_proxy(created, false).await?;
     }
     Ok(())
   }
@@ -207,23 +200,7 @@ impl super::KomodoResource for Server {
     let proxy_was_enabled =
       previous_reverse_proxy_enabled(&update.prev_toml)?;
     if updated.config.reverse_proxy.enabled || proxy_was_enabled {
-      let periphery = periphery_client(updated).await?;
-      if updated.config.reverse_proxy.enabled {
-        periphery
-          .request(EnsureReverseProxy {
-            server_id: updated.id.clone(),
-            config: updated.config.reverse_proxy.clone(),
-          })
-          .await
-          .context("Failed to reconcile managed reverse proxy")?;
-      } else {
-        periphery
-          .request(RemoveReverseProxy {
-            server_id: updated.id.clone(),
-          })
-          .await
-          .context("Failed to remove managed reverse proxy")?;
-      }
+      reconcile_reverse_proxy(updated, proxy_was_enabled).await?;
     }
     Ok(())
   }
@@ -244,7 +221,20 @@ impl super::KomodoResource for Server {
     resource: &Resource<Self::Config, Self::Info>,
     _update: &mut Update,
   ) -> anyhow::Result<()> {
-    if resource.config.reverse_proxy.enabled {
+    if db_client()
+      .certificates
+      .find_one(doc! { "config.server_id": &resource.id })
+      .await
+      .context("Failed to check Server Certificates")?
+      .is_some()
+    {
+      anyhow::bail!(
+        "Delete this Server's Certificates before deleting the Server."
+      );
+    }
+    if resource.config.reverse_proxy.enabled
+      || resource.info.reverse_proxy_managed
+    {
       periphery_client(resource)
         .await?
         .request(RemoveReverseProxy {
@@ -317,6 +307,80 @@ impl super::KomodoResource for Server {
       .await;
 
     Ok(())
+  }
+
+  async fn reconcile_reverse_proxy(
+    server: &Server,
+    previously_enabled: bool,
+  ) -> anyhow::Result<()> {
+    if server.config.reverse_proxy.enabled || previously_enabled {
+      db_client()
+        .servers
+        .update_one(
+          doc! { "_id": ObjectId::from_str(&server.id)? },
+          doc! { "$set": { "info.reverse_proxy_managed": true } },
+        )
+        .await
+        .context("Failed to persist proxy reconciliation intent")?;
+    }
+    let periphery = periphery_client(server).await?;
+    if server.config.reverse_proxy.enabled {
+      periphery
+        .request(EnsureReverseProxy {
+          server_id: server.id.clone(),
+          config: server.config.reverse_proxy.clone(),
+        })
+        .await
+        .context("Failed to reconcile managed reverse proxy")?;
+    } else {
+      periphery
+        .request(RemoveReverseProxy {
+          server_id: server.id.clone(),
+        })
+        .await
+        .context("Failed to remove managed reverse proxy")?;
+      db_client()
+        .servers
+        .update_one(
+          doc! { "_id": ObjectId::from_str(&server.id)? },
+          doc! { "$set": { "info.reverse_proxy_managed": false } },
+        )
+        .await
+        .context("Failed to acknowledge proxy removal")?;
+    }
+    Ok(())
+  }
+
+  pub(super) async fn reconcile_reverse_proxies() {
+    let _guard = super::CERTIFICATE_LIFECYCLE.lock().await;
+    let servers = match database::mungos::find::find_collect(
+      &db_client().servers,
+      doc! { "$or": [
+        { "config.reverse_proxy.enabled": true },
+        { "info.reverse_proxy_managed": true }
+      ] },
+      None,
+    )
+    .await
+    {
+      Ok(servers) => servers,
+      Err(error) => {
+        error!(
+          "Failed to load Servers for proxy reconciliation | {error:#}"
+        );
+        return;
+      }
+    };
+    for server in servers {
+      if let Err(error) =
+        reconcile_reverse_proxy(&server, false).await
+      {
+        error!(
+          "Managed proxy reconciliation failed | {} | {error:#}",
+          server.name
+        );
+      }
+    }
   }
 
   async fn post_delete(
@@ -414,7 +478,7 @@ async fn validate_reverse_proxy(
       anyhow::bail!("Reverse proxy route domains must be unique.");
     }
     route.upstream = route.upstream.trim().to_string();
-    match &route.tls {
+    match &mut route.tls {
       ReverseProxyTlsMode::Terminate { certificate_id } => {
         validate_http_proxy_upstream(&route.upstream)?;
         if server_id.is_empty() {
@@ -422,7 +486,7 @@ async fn validate_reverse_proxy(
             "Create the Server first, then attach certificates to its proxy routes."
           );
         }
-        super::certificate::validate_attachment(
+        *certificate_id = super::certificate::validate_attachment(
           certificate_id,
           server_id,
           user,

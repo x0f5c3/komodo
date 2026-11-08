@@ -16,6 +16,9 @@ use tokio::{fs, process::Command};
 
 use crate::{api::Args, config::periphery_config};
 
+static PROXY_RECONCILIATION: tokio::sync::Mutex<()> =
+  tokio::sync::Mutex::const_new(());
+
 impl Resolve<Args> for EnsureReverseProxy {
   async fn resolve(
     self,
@@ -26,7 +29,9 @@ impl Resolve<Args> for EnsureReverseProxy {
 
     #[cfg(unix)]
     {
+      let _guard = PROXY_RECONCILIATION.lock().await;
       validate_server_id(&self.server_id)?;
+      let _guard = PROXY_RECONCILIATION.lock().await;
       validate_config(&self.config)?;
       if !self.config.enabled {
         return remove_proxy(&self.server_id).await;
@@ -41,18 +46,14 @@ impl Resolve<Args> for EnsureReverseProxy {
       secure_directory(&dynamic_directory).await?;
       let (dynamic, certificate_mounts) =
         generate_dynamic_config(&self.config).await?;
-      atomic_write(
-        &dynamic_directory.join("routes.json"),
-        dynamic.as_bytes(),
-        0o644,
-      )
-      .await?;
       ensure_proxy_container(
         &self.server_id,
         &root,
         &dynamic_directory,
         &certificate_mounts,
         &self.config,
+        dynamic.as_bytes(),
+        &proxy_image()?,
       )
       .await
     }
@@ -160,24 +161,27 @@ async fn generate_dynamic_config(
   Ok((dynamic, certificate_mounts.into_iter().collect()))
 }
 
+fn proxy_image() -> anyhow::Result<String> {
+  match std::env::var("PERIPHERY_REVERSE_PROXY_IMAGE") {
+    Ok(image) if !image.trim().is_empty() => Ok(image),
+    Ok(_) => bail!("PERIPHERY_REVERSE_PROXY_IMAGE cannot be empty"),
+    Err(std::env::VarError::NotPresent) => {
+      Ok(format!("komodo-proxy:{}", env!("CARGO_PKG_VERSION")))
+    }
+    Err(error) => Err(error).context("Invalid proxy image setting"),
+  }
+}
+
 async fn ensure_proxy_container(
   server_id: &str,
   root: &Path,
   dynamic_directory: &Path,
   certificate_mounts: &[(String, PathBuf)],
   config: &ReverseProxyConfig,
+  dynamic: &[u8],
+  image: &str,
 ) -> anyhow::Result<komodo_client::entities::update::Log> {
   let port_state = root.join("ports");
-  let image = match std::env::var("PERIPHERY_REVERSE_PROXY_IMAGE") {
-    Ok(image) if !image.trim().is_empty() => image,
-    Ok(_) => bail!("PERIPHERY_REVERSE_PROXY_IMAGE cannot be empty"),
-    Err(std::env::VarError::NotPresent) => {
-      format!("komodo-proxy:{}", env!("CARGO_PKG_VERSION"))
-    }
-    Err(error) => {
-      return Err(error).context("Invalid proxy image setting");
-    }
-  };
   let mut desired_ports = format!(
     "pingora\n{image}\n{}:8080\n{}:8443\n",
     config.http_port, config.https_port
@@ -185,6 +189,32 @@ async fn ensure_proxy_container(
   for (id, _) in certificate_mounts {
     desired_ports.push_str(id);
     desired_ports.push('\n');
+  }
+  let container_name = format!("komodo-proxy-{server_id}");
+  let backup_name = format!("{container_name}-rollback");
+  let routes_path = dynamic_directory.join("routes.json");
+  let rollback_path = root.join("rollback-routes.json");
+  let rollback_ports = root.join("rollback-ports");
+  let committed_path = root.join("replacement-committed");
+  if docker_container_exists(&backup_name).await? {
+    if fs::try_exists(&committed_path).await? {
+      run_docker(["rm", &backup_name]).await?;
+    } else {
+      // Recover a replacement interrupted before it was committed.
+      let previous = fs::read(&rollback_path)
+        .await
+        .context("Failed to read proxy rollback configuration")?;
+      let ports = fs::read(&rollback_ports)
+        .await
+        .context("Failed to read proxy rollback container state")?;
+      if docker_container_exists(&container_name).await? {
+        run_docker(["rm", "-f", &container_name]).await?;
+      }
+      atomic_write(&routes_path, &previous, 0o644).await?;
+      atomic_write(&port_state, &ports, 0o644).await?;
+      run_docker(["rename", &backup_name, &container_name]).await?;
+      run_docker(["start", &container_name]).await?;
+    }
   }
   let existing_ports = match fs::read_to_string(&port_state).await {
     Ok(state) => Some(state),
@@ -196,12 +226,20 @@ async fn ensure_proxy_container(
         .context("Failed to read proxy container state");
     }
   };
-  let container_name = format!("komodo-proxy-{server_id}");
   let exists = docker_container_exists(&container_name).await?;
-  if exists && existing_ports.as_deref() != Some(&desired_ports) {
-    run_docker(["rm", "-f", &container_name]).await?;
-  }
-  if exists && existing_ports.as_deref() == Some(&desired_ports) {
+  let previous = match fs::read(&routes_path).await {
+    Ok(previous) => Some(previous),
+    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+      None
+    }
+    Err(error) => {
+      return Err(error)
+        .context("Failed to read existing proxy routes");
+    }
+  };
+  let same_container =
+    exists && existing_ports.as_deref() == Some(&desired_ports);
+  if same_container && previous.as_deref() == Some(dynamic) {
     run_docker(["start", &container_name]).await?;
     check_proxy(&container_name).await?;
     return Ok(komodo_client::entities::update::Log::simple(
@@ -210,7 +248,67 @@ async fn ensure_proxy_container(
     ));
   }
 
-  let dynamic_directory = path_arg(dynamic_directory)?;
+  let candidate = root.join("candidate");
+  secure_directory(&candidate).await?;
+  atomic_write(&candidate.join("routes.json"), dynamic, 0o644)
+    .await?;
+  let mut preflight = vec!["run".to_string(), "--rm".to_string()];
+  preflight
+    .extend(proxy_mount_arguments(&candidate, certificate_mounts)?);
+  preflight.push(image.to_string());
+  preflight.push("--check".to_string());
+  run_docker(preflight).await.context(
+    "Replacement proxy image/configuration failed preflight; active proxy unchanged",
+  )?;
+
+  if same_container {
+    atomic_write(&routes_path, dynamic, 0o644).await?;
+    let result = async {
+      run_docker(["start", &container_name]).await?;
+      check_proxy(&container_name).await
+    }
+    .await;
+    if let Err(error) = result {
+      if let Some(previous) = previous {
+        atomic_write(&routes_path, &previous, 0o644)
+          .await
+          .context("Failed to restore previous proxy routes")?;
+      }
+      return Err(error);
+    }
+    return Ok(komodo_client::entities::update::Log::simple(
+      "Ensure Reverse Proxy",
+      "Managed proxy routes updated.".into(),
+    ));
+  }
+
+  if exists {
+    let previous = previous.as_deref().context(
+      "Cannot replace active proxy without its rollback configuration",
+    )?;
+    atomic_write(&rollback_path, previous, 0o644).await?;
+    let ports = existing_ports.as_deref().context(
+      "Cannot replace active proxy without its container state",
+    )?;
+    atomic_write(&rollback_ports, ports.as_bytes(), 0o644).await?;
+    match fs::remove_file(&committed_path).await {
+      Ok(()) => {}
+      Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+      Err(error) => {
+        return Err(error)
+          .context("Failed to reset replacement commit marker");
+      }
+    }
+    run_docker(["stop", &container_name]).await?;
+    if let Err(error) =
+      run_docker(["rename", &container_name, &backup_name]).await
+    {
+      run_docker(["start", &container_name]).await.context(
+        "Failed to restart proxy after unsuccessful backup rename",
+      )?;
+      return Err(error);
+    }
+  }
   let http_publish = format!("{}:8080", config.http_port);
   let https_publish = format!("{}:8443", config.https_port);
   let mut arguments = vec![
@@ -222,9 +320,6 @@ async fn ensure_proxy_container(
     "unless-stopped".to_string(),
     "--label".to_string(),
     "komodo.skip=true".to_string(),
-    "--read-only".to_string(),
-    "--cap-drop=ALL".to_string(),
-    "--security-opt=no-new-privileges".to_string(),
     "--health-cmd=proxy --health".to_string(),
     "--health-interval=2s".to_string(),
     "--health-timeout=3s".to_string(),
@@ -235,25 +330,81 @@ async fn ensure_proxy_container(
     http_publish,
     "--publish".to_string(),
     https_publish,
-    "--volume".to_string(),
-    format!("{dynamic_directory}:/etc/komodo-proxy:ro"),
   ];
-  for (id, source) in certificate_mounts {
-    let source = path_arg(source)?;
-    arguments.push("--volume".to_string());
-    arguments.push(format!("{source}:/certificates/{id}:ro"));
+  arguments.extend(proxy_mount_arguments(
+    dynamic_directory,
+    certificate_mounts,
+  )?);
+  arguments.push(image.to_string());
+  let replacement = async {
+    atomic_write(&routes_path, dynamic, 0o644).await?;
+    run_docker(arguments)
+      .await
+      .context("Failed to start managed reverse proxy container")?;
+    check_proxy(&container_name).await?;
+    atomic_write(&port_state, desired_ports.as_bytes(), 0o644)
+      .await?;
+    if exists {
+      atomic_write(&committed_path, b"committed", 0o644).await?;
+    }
+    anyhow::Ok(())
   }
-  arguments.push(image);
-  run_docker(arguments)
-    .await
-    .context("Failed to start managed reverse proxy container")?;
-  check_proxy(&container_name).await?;
-  atomic_write(&root.join("ports"), desired_ports.as_bytes(), 0o644)
-    .await?;
+  .await;
+  if let Err(error) = replacement {
+    let rollback = async {
+      if docker_container_exists(&container_name).await? {
+        run_docker(["rm", "-f", &container_name]).await?;
+      }
+      if let Some(previous) = previous {
+        atomic_write(&routes_path, &previous, 0o644).await?;
+      }
+      if exists {
+        let ports = existing_ports
+          .as_deref()
+          .context("Missing rollback state")?;
+        atomic_write(&port_state, ports.as_bytes(), 0o644).await?;
+        run_docker(["rename", &backup_name, &container_name]).await?;
+        run_docker(["start", &container_name]).await?;
+      }
+      anyhow::Ok(())
+    }
+    .await;
+    return match rollback {
+      Ok(()) => Err(error).context("Proxy replacement failed; previous container restored"),
+      Err(rollback_error) => Err(error).context(format!(
+        "Proxy replacement also failed to roll back: {rollback_error:#}"
+      )),
+    };
+  }
+  if exists {
+    run_docker(["rm", &backup_name]).await.context(
+      "Replacement is healthy but retired proxy cleanup failed",
+    )?;
+  }
   Ok(komodo_client::entities::update::Log::simple(
     "Ensure Reverse Proxy",
     "Managed reverse proxy container started.".into(),
   ))
+}
+
+fn proxy_mount_arguments(
+  directory: &Path,
+  certificates: &[(String, PathBuf)],
+) -> anyhow::Result<Vec<String>> {
+  let directory = path_arg(directory)?;
+  let mut arguments = vec![
+    "--read-only".into(),
+    "--cap-drop=ALL".into(),
+    "--security-opt=no-new-privileges".into(),
+    "--volume".into(),
+    format!("{directory}:/etc/komodo-proxy:ro"),
+  ];
+  for (id, source) in certificates {
+    let source = path_arg(source)?;
+    arguments.push("--volume".into());
+    arguments.push(format!("{source}:/certificates/{id}:ro"));
+  }
+  Ok(arguments)
 }
 
 async fn check_proxy(name: &str) -> anyhow::Result<()> {
@@ -311,25 +462,17 @@ async fn remove_proxy(
   server_id: &str,
 ) -> anyhow::Result<komodo_client::entities::update::Log> {
   let container_name = format!("komodo-proxy-{server_id}");
-  let output = Command::new("docker")
-    .args(["rm", "-f", &container_name])
-    .stdin(Stdio::null())
-    .output()
-    .await
-    .context("Failed to remove managed reverse proxy container")?;
-  if output.status.success()
-    || String::from_utf8_lossy(&output.stderr)
-      .to_ascii_lowercase()
-      .contains("no such container")
+  for name in [&container_name, &format!("{container_name}-rollback")]
   {
-    return Ok(komodo_client::entities::update::Log::simple(
-      "Remove Reverse Proxy",
-      "Managed reverse proxy is stopped.".into(),
-    ));
+    if docker_container_exists(name).await? {
+      run_docker(["rm", "-f", name]).await.context(
+        "Failed to remove managed reverse proxy container",
+      )?;
+    }
   }
-  Err(anyhow!(
-    "Failed to remove managed reverse proxy: {}",
-    String::from_utf8_lossy(&output.stderr).trim()
+  Ok(komodo_client::entities::update::Log::simple(
+    "Remove Reverse Proxy",
+    "Managed reverse proxy is stopped.".into(),
   ))
 }
 
@@ -428,6 +571,104 @@ mod tests {
     assert!(validate_config(&duplicate_domains).is_err());
     assert!(validate_http_upstream("ftp://upstream:3000").is_err());
     assert!(validate_tcp_upstream("upstream").is_err());
+  }
+
+  #[cfg(unix)]
+  #[tokio::test]
+  #[ignore = "requires Unix Docker and the locally built komodo-proxy:0.0.0 image"]
+  async fn preserves_active_proxy_on_preflight_and_startup_failure() {
+    let id = format!("test-{}", uuid::Uuid::new_v4().simple());
+    let root = std::env::temp_dir().join(&id);
+    let dynamic_directory = root.join("dynamic");
+    secure_directory(&dynamic_directory).await.unwrap();
+    let http = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let https = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let config = ReverseProxyConfig {
+      enabled: true,
+      http_port: http.local_addr().unwrap().port(),
+      https_port: https.local_addr().unwrap().port(),
+      routes: vec![route("app.example.com", "localhost:9", false)],
+    };
+    drop((http, https));
+    let (dynamic, mounts) =
+      generate_dynamic_config(&config).await.unwrap();
+    let name = format!("komodo-proxy-{id}");
+    let result: anyhow::Result<()> = async {
+      ensure_proxy_container(
+        &id,
+        &root,
+        &dynamic_directory,
+        &mounts,
+        &config,
+        dynamic.as_bytes(),
+        "komodo-proxy:0.0.0",
+      )
+      .await?;
+      let old = Command::new("docker")
+        .args(["inspect", "--format", "{{.Id}}", &name])
+        .output()
+        .await?;
+      let failure = ensure_proxy_container(
+        &id,
+        &root,
+        &dynamic_directory,
+        &mounts,
+        &config,
+        dynamic.as_bytes(),
+        "INVALID",
+      )
+      .await;
+      assert!(failure.is_err());
+      check_proxy(&name).await?;
+      assert!(
+        ensure_proxy_container(
+          &id,
+          &root,
+          &dynamic_directory,
+          &mounts,
+          &config,
+          b"{invalid",
+          "komodo-proxy:0.0.0",
+        )
+        .await
+        .is_err()
+      );
+      check_proxy(&name).await?;
+      let occupied = std::net::TcpListener::bind("0.0.0.0:0")?;
+      let mut replacement = config.clone();
+      replacement.https_port = occupied.local_addr()?.port();
+      let (replacement_dynamic, mounts) =
+        generate_dynamic_config(&replacement).await?;
+      assert!(
+        ensure_proxy_container(
+          &id,
+          &root,
+          &dynamic_directory,
+          &mounts,
+          &replacement,
+          replacement_dynamic.as_bytes(),
+          "komodo-proxy:0.0.0",
+        )
+        .await
+        .is_err()
+      );
+      check_proxy(&name).await?;
+      let restored = Command::new("docker")
+        .args(["inspect", "--format", "{{.Id}}", &name])
+        .output()
+        .await?;
+      assert_eq!(old.stdout, restored.stdout);
+      assert_eq!(
+        fs::read(dynamic_directory.join("routes.json")).await?,
+        dynamic.as_bytes()
+      );
+      Ok(())
+    }
+    .await;
+    let cleanup = remove_proxy(&id).await;
+    fs::remove_dir_all(&root).await.unwrap();
+    cleanup.unwrap();
+    result.unwrap();
   }
 
   #[tokio::test]
