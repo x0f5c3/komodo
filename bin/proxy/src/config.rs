@@ -131,7 +131,7 @@ fn build_acceptor(
         &pingora_core::tls::version::TLS13,
         &pingora_core::tls::version::TLS12,
         ],
-      )?
+      )
       .with_no_client_auth()
       .with_single_cert(certificates, key)?;
     config.alpn_protocols =
